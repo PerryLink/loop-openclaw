@@ -1,0 +1,4 @@
+# loop-openclaw 依赖文件
+# Python >= 3.10 运行时依赖
+
+Jinja2>=3.0

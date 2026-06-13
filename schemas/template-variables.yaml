@@ -1,0 +1,773 @@
+# ============================================================
+# template-variables.yaml
+# loop-openclaw 模板变量完整 Schema
+# 定义所有 5 个模板（.j2 文件）中使用的变量
+# 用于 Phase 1.3 配置计划中的变量赋值校验
+# ============================================================
+
+# Schema 元信息
+schema:
+  name: loop-openclaw-template-variables
+  version: "1.0.0"
+  description: >
+    完整的模板变量定义，覆盖 openclaw.json.j2、SOUL.md.j2、IDENTITY.md.j2、
+    TOOLS.md.j2、AGENTS.md.j2 五个模板文件中的所有 Jinja2 变量。
+    每个变量包含类型、是否必填、默认值、使用位置、描述。
+
+# ============================================================
+# 全局变量 (Global Scope)
+# 所有模板均可引用
+# ============================================================
+global:
+
+  project_name:
+    type: string
+    required: true
+    description: 项目名称，用于标识本次 loop 配置
+    example: "bug-detection-and-auto-fix-workflow"
+    used_in: [openclaw.json.j2, AGENTS.md.j2, SOUL.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+    constraints:
+      min_length: 1
+      max_length: 128
+      pattern: "^[a-zA-Z0-9_-]+$"
+      message: "仅允许字母、数字、下划线、连字符"
+
+  project_description:
+    type: string
+    required: true
+    description: 项目/loop 工作流的一句话描述
+    example: "检测代码 bug 后自动回退修复并验证的闭环工作流"
+    used_in: [openclaw.json.j2, AGENTS.md.j2]
+    constraints:
+      min_length: 10
+      max_length: 500
+
+  loop_mode:
+    type: enum
+    required: true
+    description: loop 模式选择——决定 agent 拓扑和收敛逻辑
+    enum_values:
+      - orchestrator_worker
+      - peer_review_pair
+      - sequential_pipeline
+    used_in: [openclaw.json.j2, AGENTS.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+
+  loop_mode_display_name:
+    type: string
+    required: true
+    description: loop 模式的人类可读名称
+    mapping:
+      orchestrator_worker: "Orchestrator+Worker (Hub-and-Spoke)"
+      peer_review_pair: "Peer Review Pair (双向审查)"
+      sequential_pipeline: "Sequential Pipeline (链式 Handoff)"
+    used_in: [AGENTS.md.j2, IDENTITY.md.j2]
+
+  convergence_goal:
+    type: string
+    required: true
+    description: 收敛目标——用自然语言描述什么状态才算任务完成
+    example: "所有 P0/P1 问题清零且连续 3 轮未发现新 P0/P1/P2 问题"
+    used_in: [AGENTS.md.j2]
+    constraints:
+      must_be_observable: true
+      anti_pattern: "当你觉得差不多完成时"
+
+  convergence_rounds:
+    type: integer
+    required: true
+    description: 收敛所需的连续零新发现轮次
+    used_in: [openclaw.json.j2, AGENTS.md.j2, IDENTITY.md.j2]
+    default_by_mode:
+      orchestrator_worker: 3
+      peer_review_pair: 2
+      sequential_pipeline: 1
+    constraints:
+      min: 1
+      max: 20
+
+  max_cycles:
+    type: integer
+    required: true
+    description: 最大轮次——硬止损边界
+    used_in: [openclaw.json.j2, AGENTS.md.j2]
+    default_by_mode:
+      orchestrator_worker: 10
+      peer_review_pair: 8
+      sequential_pipeline: 5
+    constraints:
+      min: 2
+      max: 100
+
+  max_duration_minutes:
+    type: integer
+    required: true
+    description: 最大时间（分钟）——硬止损边界
+    used_in: [openclaw.json.j2, AGENTS.md.j2]
+    default_by_mode:
+      orchestrator_worker: 120
+      peer_review_pair: 90
+      sequential_pipeline: 180
+    constraints:
+      min: 10
+      max: 1440
+
+  message_ack_timeout_seconds:
+    type: integer
+    required: false
+    description: agent 间消息确认超时（秒）
+    used_in: [openclaw.json.j2, AGENTS.md.j2]
+    default_by_mode:
+      orchestrator_worker: 300
+      peer_review_pair: 180
+      sequential_pipeline: 300
+    constraints:
+      min: 30
+      max: 3600
+
+  created_at:
+    type: string
+    required: true
+    description: 配置生成时间戳（ISO 8601 格式）
+    example: "2026-06-12T14:30:00Z"
+    used_in: [openclaw.json.j2, AGENTS.md.j2]
+
+  generator_version:
+    type: string
+    required: true
+    description: loop-openclaw 生成器版本号
+    example: "1.0.0"
+    used_in: [openclaw.json.j2, AGENTS.md.j2]
+
+  log_level:
+    type: enum
+    required: false
+    description: Gateway 日志级别
+    enum_values: [debug, info, warn, error]
+    default: "info"
+    used_in: [openclaw.json.j2]
+
+  max_concurrent_sessions:
+    type: integer
+    required: false
+    description: 最大并发会话数
+    default: null  # 默认值为 agents.length * 2
+    used_in: [openclaw.json.j2]
+    constraints:
+      min: 1
+      max: 1000
+
+  session_timeout_seconds:
+    type: integer
+    required: false
+    description: 会话超时（秒）
+    default: 3600
+    used_in: [openclaw.json.j2]
+    constraints:
+      min: 300
+      max: 86400
+
+  monitoring:
+    type: object
+    required: false
+    description: 监控配置
+    used_in: [openclaw.json.j2]
+    default:
+      enabled: true
+      log_agent_messages: true
+      log_convergence_checks: true
+      alert_on_hard_stop: true
+      alert_on_escape_detected: true
+      alert_on_security_breach: true
+    properties:
+      enabled:
+        type: boolean
+        default: true
+      log_agent_messages:
+        type: boolean
+        default: true
+      log_convergence_checks:
+        type: boolean
+        default: true
+      alert_on_hard_stop:
+        type: boolean
+        default: true
+      alert_on_escape_detected:
+        type: boolean
+        default: true
+      alert_on_security_breach:
+        type: boolean
+        default: true
+
+# ============================================================
+# Agent 数组 (Agent Array)
+# 所有 agent 的定义——至少 2 个
+# ============================================================
+agents:
+  type: array
+  required: true
+  description: Agent 定义数组——至少 2 个 agent
+  used_in: [openclaw.json.j2, AGENTS.md.j2, SOUL.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+  constraints:
+    min_items: 2
+    max_items: 20
+    # 根据 loop_mode 有不同的结构约束
+    by_mode:
+      orchestrator_worker:
+        exactly_one_orchestrator: true
+        min_workers: 1
+        max_workers: 19
+      peer_review_pair:
+        exactly_items: 2
+      sequential_pipeline:
+        min_items: 2
+        max_items: 10
+  items:
+    # --- 核心标识 ---
+    id:
+      type: string
+      required: true
+      description: Agent 唯一标识符
+      example: "orchestrator"
+      constraints:
+        pattern: "^[a-z][a-z0-9_-]*$"
+        min_length: 1
+        max_length: 64
+      used_in: [openclaw.json.j2, AGENTS.md.j2, SOUL.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+
+    name:
+      type: string
+      required: true
+      description: Agent 人类可读名称
+      example: "Orchestrator Agent"
+      used_in: [openclaw.json.j2, SOUL.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+      constraints:
+        min_length: 1
+        max_length: 128
+
+    role:
+      type: enum
+      required: true
+      description: Agent 角色类型
+      enum_values_by_mode:
+        orchestrator_worker: [orchestrator, worker]
+        peer_review_pair: [peer_a, peer_b]
+        sequential_pipeline: [pipeline_stage]
+      used_in: [openclaw.json.j2, AGENTS.md.j2, IDENTITY.md.j2]
+
+    role_display:
+      type: string
+      required: true
+      description: Agent 角色的人类可读显示名
+      example: "Orchestrator (总指挥)"
+      used_in: [openclaw.json.j2, AGENTS.md.j2, SOUL.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+
+    responsibility:
+      type: string
+      required: true
+      description: Agent 的核心职责描述（一句话）
+      example: "分配任务给 Worker、收集结果、判断收敛条件"
+      used_in: [AGENTS.md.j2, openclaw.json.j2]
+
+    loop_position:
+      type: string
+      required: false
+      description: Agent 在 loop 拓扑中的位置描述
+      used_in: [IDENTITY.md.j2]
+
+    model:
+      type: string
+      required: false
+      description: Agent 使用的模型标识符
+      default: "claude-sonnet-4-20250514"
+      used_in: [openclaw.json.j2, IDENTITY.md.j2]
+      constraints:
+        min_length: 1
+        max_length: 128
+
+    system_prompt:
+      type: string
+      required: false
+      description: Agent 的系统提示词
+      default: null  # 默认由 role_display + project_name 拼接
+      used_in: [openclaw.json.j2]
+
+    # --- 权限 ---
+    permissions:
+      type: object
+      required: true
+      description: Agent 的权限配置
+      used_in: [openclaw.json.j2, AGENTS.md.j2, TOOLS.md.j2]
+      properties:
+        file_scope:
+          type: array
+          required: false
+          items: string
+          description: 允许访问的文件系统路径
+          default: ["./workspace"]
+          used_in: [openclaw.json.j2]
+
+        network:
+          type: object
+          required: false
+          description: 网络访问控制
+          used_in: [openclaw.json.j2]
+          properties:
+            allow:
+              type: array
+              items: string
+              default: []
+            deny:
+              type: array
+              items: string
+              default: []
+
+        allowed_commands:
+          type: array
+          required: false
+          items: string
+          description: 允许执行的命令白名单
+          default: []
+          used_in: [openclaw.json.j2]
+
+        blocked_commands:
+          type: array
+          required: false
+          items: string
+          description: 禁止执行的命令黑名单
+          default: []
+          used_in: [openclaw.json.j2]
+
+        sessions_send:
+          type: array
+          required: true
+          items: string
+          description: 允许发送消息的目标 agent ID 列表
+          used_in: [openclaw.json.j2, AGENTS.md.j2, TOOLS.md.j2]
+
+        sessions_spawn:
+          type: array
+          required: true
+          items: string
+          description: 允许派生子任务的目标 agent ID 列表
+          used_in: [openclaw.json.j2, AGENTS.md.j2, TOOLS.md.j2]
+
+    # --- 能力 ---
+    capabilities:
+      type: object
+      required: false
+      description: Agent 的能力开关
+      used_in: [openclaw.json.j2, TOOLS.md.j2]
+      properties:
+        can_read_files:
+          type: boolean
+          default: true
+        can_write_files:
+          type: boolean
+          default: false
+        can_execute_code:
+          type: boolean
+          default: false
+        can_install_dependencies:
+          type: boolean
+          default: false
+        can_search_web:
+          type: boolean
+          default: false
+
+    # --- 人格 (SOUL.md) ---
+    soul:
+      type: object
+      required: true
+      description: Agent 的人格定义——用于渲染 SOUL.md.j2
+      used_in: [SOUL.md.j2]
+      properties:
+        role_positioning:
+          type: string
+          required: false
+          description: 角色定位描述
+          default: null  # 使用 role_display
+
+        tone:
+          type: string
+          required: false
+          description: 语气风格描述
+          default: "专业、冷静、精确"
+          example: "严谨但鼓励性——发现问题时直接指出但不贬低"
+
+        decision_style:
+          type: string
+          required: false
+          description: 决策风格描述
+          default: "基于证据和数据，避免主观臆断"
+          example: "在有充分证据前不下结论。不确定时明确标注并请求更多信息。"
+
+        communication_style:
+          type: string
+          required: false
+          description: 沟通风格描述
+          default: "直接、结构化、使用清单和表格"
+          example: "使用结构化 Markdown 表格和编号清单"
+
+        principles:
+          type: array
+          required: false
+          items: string
+          description: 行为准则列表
+          default:
+            - "每次操作前明确你的角色边界——你只能做角色定义范围内的事。"
+            - "在做任何判断时，提供支撑证据，而非仅给出结论。"
+            - "遇到不确定的情况时，明确标注"不确定"并说明原因，而非猜测。"
+            - "尊重其他 agent 的职责边界——不越权操作，不替其他 agent 做决定。"
+            - "在每次操作后记录状态，方便下一轮或下一个 agent 理解当前进度。"
+
+        boundaries:
+          type: array
+          required: false
+          items: string
+          description: 行为边界列表
+          default:
+            - "不得超过 IDENTITY.md 中声明的能力边界。"
+            - "不得执行 TOOLS.md 中未列出的工具操作。"
+            - "不得尝试修改 openclaw.json 或其他 agent 的配置文件。"
+
+        dialogue_examples:
+          type: array
+          required: false
+          description: 对话风格示例
+          items:
+            type: object
+            properties:
+              context:
+                type: string
+                description: 对话场景
+              response:
+                type: string
+                description: 示例回复
+
+    # --- 身份 (IDENTITY.md) ---
+    identity:
+      type: object
+      required: true
+      description: Agent 的身份声明——用于渲染 IDENTITY.md.j2
+      used_in: [IDENTITY.md.j2]
+      properties:
+        core_duties:
+          type: array
+          required: true
+          items: string
+          description: 核心职责列表（至少 1 条）
+          constraints:
+            min_items: 1
+          example:
+            - "将用户需求分解为可分配的子任务"
+            - "在每个循环轮次后执行收敛判定"
+            - "根据问题严重度（P0/P1/P2）决定回退目标"
+
+        capabilities:
+          type: array
+          required: false
+          items: string
+          description: 能力清单
+          default: []
+
+        limitations:
+          type: array
+          required: true
+          items: string
+          description: 能力边界——绝对不能做的事
+          constraints:
+            min_items: 1
+          example:
+            - "不得直接操作文件系统（写）"
+            - "不得修改 openclaw.json 配置"
+            - "不得创建子 agent（sessions_spawn）"
+
+        inputs:
+          type: array
+          required: false
+          items: string
+          description: 输入描述
+          default: []
+
+        outputs:
+          type: array
+          required: false
+          items: string
+          description: 输出描述
+          default: []
+
+        quality_commitments:
+          type: array
+          required: false
+          items: string
+          description: 质量承诺
+          default:
+            - "每次产出附带自检结果（P0/P1/P2 分类）"
+            - "每次判断附带证据引用"
+            - "每次 handoff 附带完整的上下文摘要"
+
+    # --- 工具 (TOOLS.md) ---
+    tools:
+      type: object
+      required: false
+      description: Agent 的工具声明——用于渲染 TOOLS.md.j2
+      used_in: [TOOLS.md.j2]
+      properties:
+        overview:
+          type: string
+          required: false
+          description: 工具需求概述
+          default: null  # 默认由 role_display + 工具数量拼接
+
+        list:
+          type: array
+          required: false
+          description: 可用工具列表
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                required: true
+                description: 工具名称
+              purpose:
+                type: string
+                required: true
+                description: 工具用途
+              frequency:
+                type: string
+                required: false
+                description: 调用频率
+                default: "按需"
+              notes:
+                type: string
+                required: false
+                description: 使用注意事项
+                default: "无特殊注意事项"
+
+        constraints:
+          type: array
+          required: false
+          items: string
+          description: 工具使用约束
+
+        blocked:
+          type: array
+          required: false
+          description: 禁止使用的工具列表
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                required: true
+              reason:
+                type: string
+                required: true
+              alternative:
+                type: string
+                required: false
+                default: "向上游 agent 请求代为执行"
+
+# ============================================================
+# Channel 数组
+# OpenClaw Gateway 支持的聊天频道配置
+# ============================================================
+channels:
+  type: array
+  required: true
+  description: 聊天频道配置数组——至少 1 个
+  used_in: [openclaw.json.j2]
+  constraints:
+    min_items: 1
+  items:
+    id:
+      type: string
+      required: true
+      description: 频道唯一标识符
+      example: "slack-main"
+      constraints:
+        pattern: "^[a-z][a-z0-9_-]*$"
+    type:
+      type: enum
+      required: true
+      description: 频道类型
+      enum_values: [slack, discord, telegram, whatsapp, terminal, websocket]
+    config:
+      type: object
+      required: true
+      description: 频道配置——内容取决于 type
+    routing_rules:
+      type: object
+      required: true
+      properties:
+        inbound:
+          type: object
+          properties:
+            default_agent:
+              type: string
+              required: false
+              description: 入站消息默认路由到的 agent ID
+        outbound:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              default: true
+            format:
+              type: string
+              default: "markdown"
+
+# ============================================================
+# Routing 规则数组
+# Agent 间的消息路由规则
+# ============================================================
+routing_rules:
+  type: array
+  required: true
+  description: Agent 间消息路由规则
+  used_in: [openclaw.json.j2]
+  items:
+    id:
+      type: string
+      required: true
+      description: 路由规则唯一标识
+    description:
+      type: string
+      required: false
+      description: 路由规则描述
+    from:
+      type: string
+      required: true
+      description: 源 agent ID
+      constraints:
+        must_exist_in: agents[].id
+    to:
+      type: string
+      required: true
+      description: 目标 agent ID
+      constraints:
+        must_exist_in: agents[].id
+    method:
+      type: enum
+      required: true
+      description: 通信方法
+      enum_values: [sessions_send, sessions_spawn]
+    condition:
+      type: string
+      required: true
+      description: 触发条件（自然语言描述）
+      example: "Orchestrator 分配任务时"
+    priority:
+      type: enum
+      required: false
+      description: 路由优先级
+      enum_values: [low, normal, high, critical]
+      default: "normal"
+    retry_on_failure:
+      type: boolean
+      required: false
+      default: true
+    max_retries:
+      type: integer
+      required: false
+      default: 1
+
+# ============================================================
+# 模式特定变量 (Mode-specific)
+# 仅在特定 loop_mode 下使用的变量
+# ============================================================
+mode_specific:
+  description: >
+    以下变量仅在特定 loop_mode 下使用。
+    在模板渲染前，根据 loop_mode 的值确认对应的变量已赋值。
+
+  # Orchestrator+Worker 模式
+  orchestrator_worker:
+    orchestrator:
+      type: object
+      required_when: "loop_mode == 'orchestrator_worker'"
+      description: Orchestrator agent 的引用——指向 agents 数组中 role=orchestrator 的那个
+      used_in: [AGENTS.md.j2, IDENTITY.md.j2, TOOLS.md.j2]
+
+    workers:
+      type: array
+      required_when: "loop_mode == 'orchestrator_worker'"
+      description: Worker agent 列表——agents 数组中 role=worker 的所有 agent
+      constraints:
+        min_items: 1
+      used_in: [AGENTS.md.j2, IDENTITY.md.j2]
+
+  # Peer Review Pair 模式
+  peer_review_pair:
+    peer_partner_id:
+      type: string
+      required_when: "loop_mode == 'peer_review_pair'"
+      description: 每个 Peer 的对等伙伴 agent ID
+      used_in: [IDENTITY.md.j2]
+      mapping:
+        peer_a_partner: "peer_b 的 id"
+        peer_b_partner: "peer_a 的 id"
+
+  # Sequential Pipeline 模式
+  sequential_pipeline:
+    agent_position:
+      type: integer
+      required_when: "loop_mode == 'sequential_pipeline'"
+      description: Agent 在流水线中的位置（1-based）
+      used_in: [AGENTS.md.j2]
+
+    next_agent_id:
+      type: string
+      required_when: "loop_mode == 'sequential_pipeline'"
+      description: 流水线中下一个 agent 的 ID（最后一个 agent 此值为第一个 agent 的 ID 用于回退）
+      used_in: [AGENTS.md.j2]
+
+    pipeline_cycle:
+      type: integer
+      required_when: "loop_mode == 'sequential_pipeline'"
+      description: 当前流水线回退次数
+      default: 0
+      used_in: [AGENTS.md.j2]
+      constraints:
+        min: 0
+        max: 5
+
+# ============================================================
+# 变量校验规则汇总
+# ============================================================
+validation_rules:
+  description: 模板渲染前必须通过的校验规则
+
+  required_fields_present:
+    - "所有 required: true 的字段必须有非空值"
+    - "agents 数组长度 >= 2"
+    - "channels 数组长度 >= 1"
+
+  mode_structual_constraints:
+    orchestrator_worker:
+      - "agents 中有且仅有 1 个 role=orchestrator"
+      - "agents 中至少有 1 个 role=worker"
+      - "orchestrator 的 sessions_spawn 包含所有 worker id"
+      - "每个 worker 的 sessions_send 包含 orchestrator id"
+      - "worker 的 sessions_spawn 必须为空"
+    peer_review_pair:
+      - "agents 数组长度恰好为 2"
+      - "两个 agent 的 sessions_send 互相包含对方"
+      - "两个 agent 的 sessions_spawn 必须为空"
+    sequential_pipeline:
+      - "agents 数组长度 >= 2 且 <= 10"
+      - "除最后一个 agent 外，每个 agent 的 sessions_send 包含下一个 agent id"
+      - "最后一个 agent 的 sessions_send 包含第一个 agent id（用于回退）"
+      - "所有 agent 的 sessions_spawn 必须为空"
+
+  cross_references:
+    - "routing_rules 中所有 from 和 to 引用的 agent id 必须存在于 agents 数组中"
+    - "每个 agent 的 sessions_send 中引用的 id 必须存在于 agents 数组中"
+    - "每个 agent 的 sessions_spawn 中引用的 id 必须存在于 agents 数组中"
+    - "channels 中 inbound.default_agent 引用的 id 必须存在于 agents 数组中"
+
+  semantic:
+    - "convergence_goal 必须是可观测的客观事实，不能是主观判断"
+    - "convergence_rounds <= max_cycles"
+    - "所有 agent 的 capabilities 必须与 permissions 逻辑一致（如：can_write_files=false 但 file_scope 包含 ./workspace 是允许的——因为 scope 定义可访问范围但不一定可写）"

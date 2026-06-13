@@ -1,0 +1,158 @@
+{# ============================================================ #}
+{# routing_rules.yaml.j2 — Agent 间路由规则模板                 #}
+{# 定义 agent 间的消息路由、handoff、回退路径                    #}
+{# 与 openclaw.json 中的 routing 字段联合使用                    #}
+{# ============================================================ #}
+# ============================================================
+# {{ project_name }} — 路由规则配置
+# 由 loop-openclaw 配置生成器自动生成
+# Loop 模式: {{ mode }}
+# 生成时间: {{ generated_at }}
+# ============================================================
+
+# ------------------------------------------------------------
+# 路由规则总览
+# ------------------------------------------------------------
+routing:
+  # 模式描述
+  mode: {{ mode }}
+  # 模式说明: {{ mode_description or "未指定" }}
+
+  # 路由规则列表
+  rules:
+{% if mode == "orchestrator-worker" %}
+  # ---- Orchestrator+Worker: Hub-and-spoke 路由 ----
+  {% set orch = agents | selectattr("role", "equalto", "orchestrator") | first %}
+  {% set workers = agents | rejectattr("role", "equalto", "orchestrator") | list %}
+  {% for worker in workers %}
+  - id: orch-to-{{ worker.id }}
+    description: "Orchestrator 向 {{ worker.id }} 分配子任务"
+    source: {{ orch.id if orch else "orchestrator" }}
+    target: {{ worker.id }}
+    method: sessions_spawn
+    condition: "Orchestrator 判定需要由 {{ worker.role }} 执行"
+    # 该 Worker 不可再派生子 agent
+    allow_nested_spawn: false
+
+  - id: {{ worker.id }}-to-orch
+    description: "{{ worker.id }} 向 Orchestrator 返回结果"
+    source: {{ worker.id }}
+    target: {{ orch.id if orch else "orchestrator" }}
+    method: sessions_send
+    condition: "{{ worker.id }} 完成任务或发现需上报的问题"
+  {% endfor %}
+  # 回退路由
+  - id: orch-fallback-p0
+    description: "P0 致命问题——Orchestrator 触发需求重分析"
+    source: {{ orch.id if orch else "orchestrator" }}
+    target: {{ workers[0].id if workers else "worker" }}
+    method: sessions_spawn
+    condition: "发现 P0 级别致命问题"
+    priority: critical
+
+{% elif mode == "peer-review-pair" %}
+  # ---- Peer Review Pair: 双向审查路由 ----
+  {% if agents | length >= 2 %}
+  {% set a = agents[0] %}
+  {% set b = agents[1] %}
+  # 正向审查链
+  - id: {{ a.id }}-submit-to-{{ b.id }}
+    description: "{{ a.id }} 提交产出供 {{ b.id }} 审查"
+    source: {{ a.id }}
+    target: {{ b.id }}
+    method: sessions_send
+    condition: "{{ a.id }} 完成一轮产出"
+
+  - id: {{ b.id }}-review-to-{{ a.id }}
+    description: "{{ b.id }} 返回审查结果给 {{ a.id }}"
+    source: {{ b.id }}
+    target: {{ a.id }}
+    method: sessions_send
+    condition: "{{ b.id }} 完成审查"
+
+  # 反向审查链
+  - id: {{ b.id }}-submit-to-{{ a.id }}
+    description: "{{ b.id }} 提交产出供 {{ a.id }} 审查"
+    source: {{ b.id }}
+    target: {{ a.id }}
+    method: sessions_send
+    condition: "{{ b.id }} 完成一轮产出"
+
+  - id: {{ a.id }}-review-to-{{ b.id }}
+    description: "{{ a.id }} 返回审查结果给 {{ b.id }}"
+    source: {{ a.id }}
+    target: {{ b.id }}
+    method: sessions_send
+    condition: "{{ a.id }} 完成审查"
+
+  # 僵局处理——双方无法达成一致
+  - id: stalemate-escalation
+    description: "僵局——双方审查多轮仍无法达成一致"
+    source: "{{ a.id }} | {{ b.id }}"
+    target: system
+    method: alert
+    condition: "连续 {{ convergence_rounds * 2 }} 轮双方审查结果不一致"
+    action: "STALEMATE: 需要人工裁决"
+  {% endif %}
+
+{% elif mode == "sequential-pipeline" %}
+  # ---- Sequential Pipeline: 链式 Handoff 路由 ----
+  {% for agent in agents %}
+  {% if not loop.last %}
+  - id: {{ agent.id }}-handoff-to-{{ agents[loop.index].id }}
+    description: "{{ agent.id }} 完成阶段 -> 移交 {{ agents[loop.index].id }}"
+    source: {{ agent.id }}
+    target: {{ agents[loop.index].id }}
+    method: sessions_send
+    condition: "{{ agent.role }} 阶段完成"
+    message_type: HANDOFF
+  {% endif %}
+  {% if not loop.first %}
+  - id: {{ agent.id }}-fallback-to-{{ agents[loop.index0 - 1].id }}
+    description: "{{ agent.id }} 回退到上游 {{ agents[loop.index0 - 1].id }}"
+    source: {{ agent.id }}
+    target: {{ agents[loop.index0 - 1].id }}
+    method: sessions_send
+    condition: "{{ agent.id }} 发现 P2 问题——就近修正"
+    message_type: FALLBACK
+    priority: low
+  {% endif %}
+  {% endfor %}
+  # 末尾 agent 回退路由
+  {% set last_agent = agents | last %}
+  - id: {{ last_agent.id }}-fallback-p0
+    description: "P0 致命问题——末尾 agent 回退到流水线起点"
+    source: {{ last_agent.id }}
+    target: {{ agents[0].id if agents else "agent-1" }}
+    method: sessions_send
+    condition: "{{ last_agent.role }} 验证发现 P0 致命问题"
+    message_type: FALLBACK
+    priority: critical
+
+{% endif %}
+
+  # ------------------------------------------------------------
+  # 全局回退路由（所有模式适用）
+  # ------------------------------------------------------------
+  global_fallback:
+    # 通信丢失时的处理
+    communication_lost:
+      action: retry_then_alert
+      max_retries: 1
+      alert_target: system
+    # 权限越界时的处理
+    security_breach:
+      action: immediate_stop
+      alert_target: system
+      message: "SECURITY_BREACH_DETECTED"
+
+# ------------------------------------------------------------
+# 路由校验规则
+# ------------------------------------------------------------
+validation:
+  # 禁止自环路由（source == target）
+  no_self_routing: true
+  # 禁止未声明 agent 之间的通信
+  declared_agents_only: true
+  # 最大路由跳数（防止无限转发）
+  max_hops: {{ agents | length + 2 }}

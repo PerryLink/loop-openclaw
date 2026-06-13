@@ -1,0 +1,69 @@
+{
+  "$schema": "https://loop-openclaw/schemas/config-plan.json",
+  "description": "Peer-Review 模式示例配置计划 —— 代码审查工作流",
+  "project_name": "code-review-pair",
+  "mode": "peer-review-pair",
+  "max_cycles": 8,
+  "max_duration_minutes": 90,
+  "convergence_rounds": 2,
+  "agents": [
+    {
+      "agent_id": "reviewer_a",
+      "role": "peer_a",
+      "description": "审查者 A：产出代码/文档并接收 reviewer_b 的审查反馈后迭代改进",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["reviewer_b"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "file_write": true,
+        "command_exec": true
+      },
+      "tools": ["file_read", "file_write", "command_exec", "sessions_send"],
+      "persona_traits": ["创造性思维", "接受批评", "快速迭代"],
+      "boundaries": ["不得修改 reviewer_b 的产出", "每次修改需附带修改说明"]
+    },
+    {
+      "agent_id": "reviewer_b",
+      "role": "peer_b",
+      "description": "审查者 B：审查 reviewer_a 的产出，按 P0/P1/P2 分级给出审查意见",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["reviewer_a"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "command_exec": true
+      },
+      "tools": ["file_read", "command_exec", "sessions_send"],
+      "persona_traits": ["批判性思维", "注重标准", "建设性反馈"],
+      "boundaries": ["不得直接修改 reviewer_a 的代码", "审查意见需附带具体证据"]
+    }
+  ],
+  "channels": [
+    {
+      "id": "default",
+      "type": "console",
+      "config": {},
+      "routing_rules": {
+        "inbound": {"default_agent": "reviewer_a"},
+        "outbound": {"enabled": true, "format": "markdown"}
+      }
+    }
+  ],
+  "convergence_criteria": {
+    "P0": "安全漏洞或逻辑错误 —— 必须由 reviewer_a 重新产出",
+    "P1": "代码质量问题 —— reviewer_a 修复后重新提交审查",
+    "P2": "风格/可读性建议 —— 可选采纳",
+    "rule": "本轮 + 上一轮双方审查均未发现 P0/P1/P2 问题 → 收敛"
+  },
+  "routing_rules": [
+    {"source": "reviewer_a", "target": "reviewer_b", "method": "sessions_send", "condition": "提交产出请求审查", "priority": "high"},
+    {"source": "reviewer_b", "target": "reviewer_a", "method": "sessions_send", "condition": "返回审查结果", "priority": "high"}
+  ],
+  "extra": {
+    "model_provider": "anthropic",
+    "temperature": 0.7,
+    "max_tokens": 4096,
+    "stalemate_instruction": "STALEMATE: 双方连续 3 轮无法达成一致，请求人工裁决"
+  }
+}

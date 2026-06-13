@@ -1,0 +1,164 @@
+{
+  "_comment": "============================================================",
+  "_comment2": "modes/orchestrator.json — Orchestrator+Worker 模式决策树",
+  "_comment3": "Hub-and-spoke 拓扑：1 个 Orchestrator + N 个 Worker",
+  "_comment4": "适用场景：结构化项目开发，明确分工",
+  "_comment5": "收敛机制：Orchestrator 连续 N 轮无新问题 -> 收敛",
+  "_comment6": "============================================================",
+
+  "mode": {
+    "id": "orchestrator-worker",
+    "name_cn": "Orchestrator+Worker 模式",
+    "name_en": "Orchestrator+Worker Mode",
+    "topology": "hub-and-spoke",
+    "description": "一个 Orchestrator agent 作为中央协调者，向 N 个 Worker agent 分配子任务、收集结果、判定收敛。Worker 之间不直接通信。",
+    "applicable_scenarios": [
+      "结构化项目开发——有明确的设计者、实施者、测试者角色分工",
+      "Bug 修复工作流——有明确的发现者、修复者、验证者分工",
+      "多模块并行开发——Orchestrator 协调各模块的 Worker 并行工作",
+      "需要中央决策者统一判定任务完成度的场景"
+    ],
+    "not_applicable_scenarios": [
+      "两个 agent 互相审查对方产出的场景——使用 peer-review-pair",
+      "严格顺序执行的流水线——使用 sequential-pipeline",
+      "所有角色同等重要、无层级关系的场景"
+    ]
+  },
+
+  "decision_tree": {
+    "root": {
+      "id": "start",
+      "question_cn": "你的多 agent 协作场景中是否存在一个天然的协调者/管理者角色？",
+      "question_en": "Does your multi-agent scenario have a natural coordinator/manager role?",
+      "yes": "check_worker_count",
+      "no": "reject_orchestrator"
+    },
+    "check_worker_count": {
+      "id": "check_worker_count",
+      "question_cn": "有多少个执行具体任务的 Worker？",
+      "question_en": "How many workers will execute specific tasks?",
+      "options": {
+        "1": "warn_single_worker",
+        "2_to_5": "check_complexity",
+        "6_plus": "check_complexity_large"
+      }
+    },
+    "check_complexity": {
+      "id": "check_complexity",
+      "question_cn": "任务是否可以拆分为独立的子任务（各 Worker 可并行执行，互不依赖）？",
+      "question_en": "Can the work be decomposed into independent subtasks (workers can execute in parallel without dependencies)?",
+      "yes": "check_communication_pattern",
+      "no": "recommend_review_or_pipeline"
+    },
+    "check_complexity_large": {
+      "id": "check_complexity_large",
+      "question_cn": "任务量较大（6+ Worker），是否所有 Worker 都需要由同一个 Orchestrator 协调？",
+      "question_en": "With 6+ workers, do all workers need coordination from the same Orchestrator?",
+      "yes": "recommend_orchestrator_large",
+      "no": "recommend_split_groups"
+    },
+    "check_communication_pattern": {
+      "id": "check_communication_pattern",
+      "question_cn": "Worker 之间是否需要直接通信（互相传递信息、协同操作）？",
+      "question_en": "Do workers need to communicate directly with each other?",
+      "yes": "warn_spoke_communication",
+      "no": "recommend_orchestrator"
+    },
+    "decisions": {
+      "recommend_orchestrator": {
+        "id": "recommend_orchestrator",
+        "result": "strongly_recommend",
+        "recommendation_cn": "强烈推荐使用 Orchestrator+Worker 模式。",
+        "reason_cn": "你的场景具备明确的协调者角色、可拆分的独立子任务、Worker 间无需直接通信——这正是 Hub-and-spoke 拓扑的理想场景。",
+        "next_steps_cn": [
+          "定义 Orchestrator agent 的职责：任务分解、任务分配、结果收集、收敛判定",
+          "定义每个 Worker agent 的职责和能力边界",
+          "设置 Completion Gate：Orchestrator 连续 N 轮无新 P0/P1/P2 即收敛",
+          "配置回退路由：P0->需求重分析, P1->定向修复, P2->累积处理",
+          "设置硬止损：默认 max_cycles=10, convergence_rounds=3"
+        ]
+      },
+      "recommend_orchestrator_large": {
+        "id": "recommend_orchestrator_large",
+        "result": "recommend_with_caution",
+        "recommendation_cn": "推荐 Orchestrator+Worker 模式，但建议增加监控。",
+        "reason_cn": "6+ Worker 场景下 Orchestrator 的协调负担较重，建议增加收敛轮次和设置更严格的超时策略。",
+        "next_steps_cn": [
+          "增大 max_cycles 到 15 以适应更多 Worker 的协调开销",
+          "设置 convergence_rounds=4 确保充分收敛",
+          "考虑外部 cron watchdog 监控 loop 状态"
+        ]
+      },
+      "warn_single_worker": {
+        "id": "warn_single_worker",
+        "result": "acceptable_but_overkill",
+        "recommendation_cn": "可以使用 Orchestrator+Worker 模式，但可能过于复杂。",
+        "reason_cn": "仅有 1 个 Worker 时，Orchestrator+Worker 的结构开销（任务分解、分配、收集）可能大于收益。考虑简化为 sequential-pipeline 或 peer-review-pair 模式。",
+        "alternative_modes": ["sequential-pipeline", "peer-review-pair"]
+      },
+      "warn_spoke_communication": {
+        "id": "warn_spoke_communication",
+        "result": "recommend_with_caveat",
+        "recommendation_cn": "可以使用 Orchestrator+Worker 模式，但 Worker 间通信需通过 Orchestrator 中转。",
+        "reason_cn": "Hub-and-spoke 拓扑中 Worker 间不应直接通信。若 Worker 间确实需要直接通信，考虑使用 peer-review-pair 或设计更复杂的路由规则。",
+        "caveat_cn": "可将 Worker 间通信改为：Worker A -> Orchestrator -> Worker B 的中转模式，但这会增加轮次开销。"
+      },
+      "reject_orchestrator": {
+        "id": "reject_orchestrator",
+        "result": "not_recommended",
+        "recommendation_cn": "不推荐 Orchestrator+Worker 模式。",
+        "reason_cn": "你的场景中缺少天然的协调者角色。Orchestrator+Worker 模式的核心是 Hub-and-spoke 拓扑——必须有明确的管理者。",
+        "alternative_modes": ["peer-review-pair", "sequential-pipeline"]
+      },
+      "recommend_review_or_pipeline": {
+        "id": "recommend_review_or_pipeline",
+        "result": "not_recommended",
+        "recommendation_cn": "不推荐 Orchestrator+Worker 模式——任务无法拆分为独立子任务。",
+        "reason_cn": "当任务各阶段有强依赖关系（不可并行）时，sequential-pipeline 更合适；当需要交叉审查时，peer-review-pair 更合适。",
+        "alternative_modes": ["sequential-pipeline", "peer-review-pair"]
+      },
+      "recommend_split_groups": {
+        "id": "recommend_split_groups",
+        "result": "recommend_nested",
+        "recommendation_cn": "推荐分组部署 Orchestrator+Worker。",
+        "reason_cn": "6+ Worker 可分到多个 Orchestrator 下，形成层级 Hub-and-spoke 结构。",
+        "next_steps_cn": [
+          "按模块/领域将 Worker 分组",
+          "每组配置独立的 Orchestrator+Worker 配置",
+          "顶层 Orchestrator 协调各组 Orchestrator"
+        ]
+      }
+    }
+  },
+
+  "configuration_defaults": {
+    "max_cycles": 10,
+    "convergence_rounds": 3,
+    "max_duration_minutes": 60,
+    "orchestrator_permissions": {
+      "sessions_spawn": true,
+      "sessions_send": true,
+      "file_read": true,
+      "file_write": false
+    },
+    "worker_permissions": {
+      "sessions_spawn": false,
+      "sessions_send": true,
+      "file_read": true,
+      "file_write": true
+    },
+    "routing_topology_note_cn": "Orchestrator -> Worker (sessions_spawn), Worker -> Orchestrator (sessions_send), Worker <-> Worker (禁止)"
+  },
+
+  "completion_gate": {
+    "description_cn": "Orchestrator 在每轮任务分发和结果收集后执行收敛判定。",
+    "condition_cn": "若连续 N 轮未发现任何新 P0/P1/P2 问题，且所有已知问题状态为'已修复'或'已验证'，则判定任务完成。",
+    "reply_format": "CONVERGED: 任务完成。连续零新发现轮次: N/N。最终状态: [摘要]。"
+  },
+
+  "fallback_routing": {
+    "p0_cn": "重新分析需求 -> sessions_spawn(designer, 需求重分析)",
+    "p1_cn": "定向修复 -> sessions_send(target_worker, 修复指令)",
+    "p2_cn": "累积到 P2 backlog — 不触发回退，当前 phase 完成后统一处理"
+  }
+}

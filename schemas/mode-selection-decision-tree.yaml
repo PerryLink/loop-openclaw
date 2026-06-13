@@ -1,0 +1,396 @@
+# ============================================================
+# mode-selection-decision-tree.yaml
+# loop-openclaw 模式选择决策树
+# 用于 Phase 1.2 — 根据需求特征自动推荐最合适的 loop 模式
+# ============================================================
+
+# Schema 元信息
+schema:
+  name: loop-openclaw-mode-selection-decision-tree
+  version: "1.0.0"
+  description: >
+    从三种 loop 模式中选择最匹配用户需求的模式。
+    决策依据：agent 角色对称性、任务阶段依赖性、收敛起点、
+    质量保证机制、回退路径复杂度。
+
+# ============================================================
+# 三种可选模式
+# ============================================================
+modes:
+  - id: orchestrator_worker
+    name: "Orchestrator+Worker"
+    display_name: "Orchestrator+Worker (Hub-and-Spoke)"
+    topology: "hub-and-spoke: 1 Orchestrator + N Workers"
+    summary: >
+      中心化协调——一个 Orchestrator agent 分配任务给多个 Worker agent，
+      收集结果，判断收敛。Worker 之间不直接通信。
+    best_for:
+      - "结构化项目开发——有明确分工"
+      - "需要中心化质量把关"
+      - "Worker 角色不同且独立"
+      - "任务可分解为并行子任务"
+    not_for:
+      - "仅 2 个 agent 的简单场景"
+      - "agent 角色对称/对等"
+      - "严格串行的阶段依赖"
+
+  - id: peer_review_pair
+    name: "Peer Review Pair"
+    display_name: "Peer Review Pair (双向审查)"
+    topology: "pair: 2 个对等 Peer agent 双向审查"
+    summary: >
+      两个对等 agent 互相审查：A 产出→B 审查→A 修复→B 再审→...→收敛。
+      双方角色对称，在 producer 和 reviewer 之间交替。
+    best_for:
+      - "需要交叉审查的高质量要求任务"
+      - "安全审计、代码质量审查"
+      - "对等协作——两个 agent 能力相当"
+      - "需要对抗性思维（一方尝试找另一方的漏洞）"
+    not_for:
+      - "需要 3+ agent"
+      - "有明显的主从/上下级关系"
+      - "任务有明显的前后阶段依赖"
+
+  - id: sequential_pipeline
+    name: "Sequential Pipeline"
+    display_name: "Sequential Pipeline (链式 Handoff)"
+    topology: "chain: Agent-1 → Agent-2 → ... → Agent-N → (回退) → Agent-1"
+    summary: >
+      链式流水线——每个 agent 完成自己的阶段后 handoff 给下一个。
+      最后一个 agent 判定质量，通过则收敛，不通过则回退到第一个 agent 重新开始。
+    best_for:
+      - "阶段性流水线——设计→实施→测试"
+      - "每个阶段由不同角色负责"
+      - "阶段之间有严格的先后依赖"
+      - "质量检查是流水线的最后一个阶段"
+    not_for:
+      - "阶段可以并行执行"
+      - "需要中心化协调"
+      - "仅 2 个阶段（用 Peer Review Pair 更高效）"
+
+# ============================================================
+# 决策树
+# ============================================================
+decision_tree:
+  description: >
+    从根节点开始，按顺序回答每个决策节点的判定问题。
+    每个判定问题有 2-4 个选项。选择最匹配用户需求的选项，沿分支深入。
+
+  # 根节点
+  root:
+    id: D1
+    question: "用户需求中有几个 distinct agent 角色？"
+    description: >
+      distinct 角色是指职责不同的 agent 类型。
+      例如"1 个设计师 + 1 个开发者"是 2 个 distinct 角色，
+      "1 个 Orchestrator + 3 个不同类型的 Worker"是 4 个 distinct 角色。
+    options:
+      - value: "exactly_2"
+        label: "恰好 2 个"
+        goto: D2_peer_check
+        hint: "检查是否适合 Peer Review Pair"
+
+      - value: "3_or_more"
+        label: "3 个或更多"
+        goto: D3_structure_check
+        hint: "检查任务结构和协调需求"
+
+      - value: "2_but_asymmetric"
+        label: "2 个但角色不对称（有明显的主从关系）"
+        goto: D4_orchestrator_check
+        hint: "可能适合 Orchestrator+Worker（1 Orchestrator + 1 Worker 的最小形式）"
+
+  # 节点 D2: 检查 Peer 适配性
+  D2_peer_check:
+    id: D2
+    question: "两个 agent 的角色是否对称（对等），且需要互相审查对方的产出？"
+    description: >
+      对称意味着两个 agent 能力相当、职责互为镜像。
+      例如"两个安全审计员互相检查对方的审计报告"是对称的，
+      "设计师设计 + 开发者实施"是不对称的。
+    options:
+      - value: "yes_symmetric"
+        label: "是对称对等关系——需要互相审查"
+        goto: D2a_sequential_dependency
+        hint: "进一步确认是否有阶段依赖"
+
+      - value: "no_asymmetric"
+        label: "不对称——有明显的主从或前后关系"
+        goto: D4_orchestrator_check
+        hint: "考虑 Orchestrator+Worker 或 Sequential Pipeline"
+
+  # 节点 D2a: Peer 模式下的阶段依赖检查
+  D2a_sequential_dependency:
+    id: D2a
+    question: "两个 agent 的工作是否有严格的先后阶段依赖（A 必须完成 B 才能开始）？"
+    description: >
+      如果 A 和 B 可以同时对同一事物进行审查/产出，则无阶段依赖。
+      如果 B 的产出严格依赖 A 先完成，则有阶段依赖。
+    options:
+      - value: "no_dependency"
+        label: "无严格阶段依赖——可并行/交替进行"
+        select: peer_review_pair
+        confidence: high
+        rationale: >
+          两个对等 agent，职责对称，无严格阶段依赖——Peer Review Pair 的最优场景。
+          Agent 在 producer 和 reviewer 之间交替，每次审查推动质量提升。
+
+      - value: "has_dependency"
+        label: "有严格阶段依赖——A 先完成，B 基于 A 的产出开始"
+        goto: D5_pipeline_check
+        hint: "可能是 2 阶段 Sequential Pipeline"
+
+  # 节点 D3: 检查任务结构（3+ agent）
+  D3_structure_check:
+    id: D3
+    question: "任务是否可以分解为独立的并行子任务（由不同 agent 同时处理）？"
+    description: >
+      可并行意味着多个 agent 可以同时进行而不需要等待其他 agent 的结果。
+      例如"1 个 agent 写前端、1 个 agent 写后端、1 个 agent 写测试"可并行，
+      "先设计、再实施、后测试"不可并行。
+    options:
+      - value: "parallelizable"
+        label: "可并行分解——子任务独立、可同时执行"
+        goto: D4_orchestrator_check
+        hint: "强烈暗示 Orchestrator+Worker"
+
+      - value: "strictly_sequential"
+        label: "严格串行——有明确的阶段顺序，后阶段依赖前阶段产出"
+        goto: D5_pipeline_check
+        hint: "强烈暗示 Sequential Pipeline"
+
+      - value: "mixed"
+        label: "混合——部分可并行、部分串行"
+        goto: D6_mixed_check
+        hint: "更复杂——需要进一步分析协调需求"
+
+  # 节点 D4: 检查 Orchestrator+Worker 适配性
+  D4_orchestrator_check:
+    id: D4
+    question: "是否需要中心化协调——一个 agent 专门负责任务分配、结果收集和收敛判定？"
+    description: >
+      中心化协调意味着有一个专门的 agent（不直接参与执行）负责：
+      - 将大任务分解为子任务
+      - 将子任务分配给执行 agent
+      - 收集所有执行 agent 的结果
+      - 判断是否收敛、决定下一轮方向
+    options:
+      - value: "yes_centralized"
+        label: "需要中心化协调——有专门的协调者角色"
+        select: orchestrator_worker
+        confidence: high
+        rationale: >
+          存在一个明确的协调角色+多个执行角色。任务可并行分解。
+          协调者不执行具体任务，只做分发和判定——典型的 Orchestrator+Worker 模式。
+
+      - value: "no_coordinator"
+        label: "没有专门的协调者——agent 自行决定何时完成"
+        goto: D5_pipeline_check
+        hint: "考虑 Peer Review Pair 或 Sequential Pipeline"
+
+      - value: "coordinator_also_executes"
+        label: "有协调者但它也参与执行"
+        select: orchestrator_worker
+        confidence: medium
+        rationale: >
+          协调者兼具执行职责——不纯粹但 Orchestrator+Worker 仍然最匹配。
+          在 AGENTS.md 中明确 Orchestrator 的执行边界，防止角色混淆。
+        warning: >
+          协调者兼执行者可能导致"自己审查自己产出"的盲区。
+          建议在 AGENTS.md 中要求 Orchestrator 对自己的执行产出采用更严格的审查标准。
+
+  # 节点 D5: 检查 Sequential Pipeline 适配性
+  D5_pipeline_check:
+    id: D5
+    question: "任务是否有明确的、不可更改的阶段顺序（每个阶段必须在上一个阶段完成后才能开始）？"
+    description: >
+      明确的阶段顺序意味着存在一个"如果跳过/打乱某个阶段就会导致失败"的严格依赖。
+      例如"设计→原型→实施→测试"有明确顺序，"feature A + feature B 同时开发"无序。
+    options:
+      - value: "clear_linear_sequence"
+        label: "有明确的线性阶段顺序——设计→实施→测试等"
+        goto: D5a_quality_check_position
+        hint: "进一步确认质量检查的位置"
+
+      - value: "loose_or_no_sequence"
+        label: "没有严格顺序或顺序松散"
+        goto: D6_mixed_check
+        hint: "重新评估——可能更适合其他模式"
+
+  # 节点 D5a: 质量检查位置
+  D5a_quality_check_position:
+    id: D5a
+    question: "质量检查/验证是流水线的最后一个阶段，还是穿插在每个阶段中？"
+    description: >
+      "最后阶段"意味着有一个专门的"测试 agent"或"质量审查 agent"放在流水线末尾。
+      "穿插"意味着每个 agent 在完成自己的阶段时自行检查质量。
+    options:
+      - value: "last_stage"
+        label: "质量检查是最后一个阶段——有专门的质量把关 agent"
+        select: sequential_pipeline
+        confidence: high
+        rationale: >
+          线性阶段依赖+末尾质量检查——Sequential Pipeline 的最优场景。
+          流水线末尾的 agent 执行全面验证，发现 P0/P1/P2 问题后沿链回退。
+
+      - value: "interleaved"
+        label: "质量检查穿插在每个阶段中——每个 agent 自检"
+        select: sequential_pipeline
+        confidence: medium
+        rationale: >
+          虽然质量检查不集中在末尾，但流水线末尾 agent 仍可做最终全流程验证。
+          建议在 AGENTS.md 中要求每个阶段 agent 完成自检后再 handoff。
+        warning: >
+          无集中质量检查可能导致问题"滑过"各阶段。
+          建议在 AGENTS.md 中增加中间阶段的 P0/P1 问题不得 handoff 的强制规则。
+
+  # 节点 D6: 混合场景
+  D6_mixed_check:
+    id: D6
+    question: "在混合场景下，以下哪个特征最突出？"
+    options:
+      - value: "coordination_heavy"
+        label: "协调需求突出——需要频繁的任务重分配和状态同步"
+        select: orchestrator_worker
+        confidence: medium
+        rationale: >
+          协调密集型任务最需要中心化调度。
+          即使部分工作串行，Orchestrator 也可以管理串行依赖（按顺序分配任务）。
+
+      - value: "quality_critical"
+        label: "质量要求突出——需要多轮交叉审查"
+        select: peer_review_pair
+        confidence: medium
+        rationale: >
+          质量至上场景中，对抗性审查比中心化协调更有效。
+          如果 agent 超过 2 个，建议拆分为多对 Peer Review Pair。
+
+      - value: "phase_oriented"
+        label: "阶段导向突出——有明显的里程碑和阶段门"
+        select: sequential_pipeline
+        confidence: medium
+        rationale: >
+          里程碑驱动的项目最适合分阶段流水线。
+          每个阶段完成一个 milestone，阶段门处做质量检查。
+
+      - value: "all_equally_unclear"
+        label: "三种特征都不突出——需求不够具体"
+        select: orchestrator_worker
+        confidence: low
+        rationale: >
+          当需求不够具体时，Orchestrator+Worker 是最灵活的选择——它可以模拟串行流水线
+          （Orchestrator 按顺序分配任务）和简化版审查（Orchestrator 收集结果后审查）。
+          但应在 02-mode-selection.md 中标注低置信度并建议用户细化需求。
+        warning: >
+          低置信度选择。建议在输出的 02-mode-selection.md 中：
+          1. 标注选择理由为"兜底策略"。
+          2. 列出需要用户澄清的具体问题。
+          3. 说明切换到其他两种模式的条件。
+
+# ============================================================
+# 快速路由表 (Quick Reference)
+# 极简版——根据最关键特征直接给出结果
+# ============================================================
+quick_routing:
+  description: >
+    如果需求特征非常明确，可直接通过此表确定模式，无需走完整决策树。
+    如果"最佳匹配"和"次优匹配"特征同时出现，则需要走完整决策树。
+
+  rules:
+    - primary_feature: "有专门的协调者 + 多个不同角色的执行者"
+      primary_mode: orchestrator_worker
+      confidence: high
+      secondary_feature: "协调者同时也是执行者"
+      secondary_mode: orchestrator_worker
+      anti_feature: "仅 2 个对等 agent 且无专门协调者"
+      anti_suggests: peer_review_pair
+
+    - primary_feature: "恰好 2 个 agent + 角色对称 + 需要互相审查"
+      primary_mode: peer_review_pair
+      confidence: high
+      secondary_feature: "2 个 agent + 有前后依赖但无协调者"
+      secondary_mode: sequential_pipeline
+      anti_feature: "3 个或更多 agent"
+      anti_suggests: orchestrator_worker
+
+    - primary_feature: "线性阶段顺序 + 末尾质量检查"
+      primary_mode: sequential_pipeline
+      confidence: high
+      secondary_feature: "线性阶段顺序 + 非末尾质量检查"
+      secondary_mode: sequential_pipeline
+      anti_feature: "阶段可并行"
+      anti_suggests: orchestrator_worker
+
+# ============================================================
+# 模式选择输出格式（用于 artifacts/02-mode-selection.md）
+# ============================================================
+output_format:
+  description: Phase 1.2 产出的 02-mode-selection.md 文件结构
+
+  sections:
+    - heading: "## 选择结果"
+      content: "[模式名称] (置信度: high / medium / low)"
+
+    - heading: "## 决策路径"
+      content: |
+        从决策树根节点到叶节点的完整路径。
+        每一步列出：节点 ID、判定问题、用户需求中的匹配特征、选择。
+
+    - heading: "## 匹配理由"
+      content: |
+        3-5 条理由，每条引用用户需求中的具体描述和决策树中的匹配节点。
+        例如："用户描述了'设计师→开发→测试'的线性阶段依赖，这匹配决策树
+        节点 D5 的'clear_linear_sequence'选项。"
+
+    - heading: "## 不匹配模式及排除理由"
+      content: |
+        对另外两种模式逐一分析：
+        - 模式 X：[排除理由——引用决策树中不匹配的节点]
+        - 模式 Y：[排除理由——引用决策树中不匹配的节点]
+
+    - heading: "## 建议的 Agent 拓扑（初步）"
+      content: |
+        基于选定模式的初步 agent 拓扑建议。
+        例如：
+        ```
+        Orchestrator (agent-0)
+          ├── Worker-1: 设计师
+          ├── Worker-2: 开发者
+          └── Worker-3: 测试者
+        ```
+
+    - heading: "## 注意事项"
+      content: |
+        如果置信度为 medium 或 low，列出具体的风险和需要用户确认的事项。
+        例如："置信度为 medium——用户未明确说明是否需要专门的协调者。
+        若实际上不需要，应切换到 Sequential Pipeline。"
+
+# ============================================================
+# 边界情况处理
+# ============================================================
+edge_cases:
+  - case: "用户只提到 1 个 agent"
+    resolution: >
+      提示用户 loop 至少需要 2 个 agent。
+      建议最小配置：1 Orchestrator + 1 Worker，或 1 Peer A + 1 Peer B。
+      如果用户坚持只有 1 个 agent，建议使用 loop-claudecode（单 agent 多轮 loop 适合 loop-claudecode 的 /goal 机制）。
+
+  - case: "用户提到 10+ agent"
+    resolution: >
+      检查是否可以通过合并相似角色来减少 agent 数量。
+      如果确需 10+ agent，优先推荐 Orchestrator+Worker（Orchestrator 管理复杂度可控），
+      但标注 10+ agent 的协调开销可能接近收敛上限。
+
+  - case: "用户需求同时满足多个模式的 best_for"
+    resolution: >
+      走完整决策树，按节点优先级排列。
+      D4（中心化协调）优先级最高——如果存在专门的协调者，选 Orchestrator+Worker。
+      其次 D5（线性阶段）——如果有严格阶段顺序，选 Sequential Pipeline。
+      最后 D2（对称对等）——如果两者都不符合，检查 Peer Review Pair。
+      在 02-mode-selection.md 中完整说明冲突和解决逻辑。
+
+  - case: "用户需求不满足任何模式的 best_for"
+    resolution: >
+      选择三种模式中最接近的一种（Orchestrator+Worker 最灵活可兜底）。
+      置信度设为 low。
+      在 02-mode-selection.md 中明确声明"需求与所有模式均有偏差"，建议用户调整需求或接受低匹配度。

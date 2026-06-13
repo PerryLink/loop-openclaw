@@ -1,0 +1,172 @@
+{
+  "_comment": "============================================================",
+  "_comment2": "modes/sequential.json — Sequential Pipeline 模式决策树",
+  "_comment3": "链式 Handoff 拓扑：A1 -> A2 -> ... -> AN",
+  "_comment4": "适用场景：阶段性流水线（设计->实施->测试）",
+  "_comment5": "收敛机制：末尾质量 agent 判定通过 -> 收敛，否则回退",
+  "_comment6": "============================================================",
+
+  "mode": {
+    "id": "sequential-pipeline",
+    "name_cn": "Sequential Pipeline 模式",
+    "name_en": "Sequential Pipeline Mode",
+    "topology": "chain-handoff",
+    "description": "N 个 agent 按顺序执行各自阶段，前一阶段完成后 handoff 给下一阶段。末尾的质检 agent 负责最终验证——通过则 CONVERGED，否则根据问题严重度回退到对应阶段。",
+    "applicable_scenarios": [
+      "经典 DevOps 流水线：设计 -> 编码 -> 测试 -> 部署验证",
+      "内容生产流水线：调研 -> 大纲 -> 撰写 -> 审校 -> 发布",
+      "数据处理流水线：采集 -> 清洗 -> 分析 -> 报告",
+      "翻译审校流水线：初译 -> 审校 -> 润色 -> 终审",
+      "任何有严格先后顺序、前一阶段产出是后一阶段输入的工作流"
+    ],
+    "not_applicable_scenarios": [
+      "各阶段可并行执行的场景——使用 orchestrator-worker",
+      "仅有 2 个 agent 且需要互相审查的场景——使用 peer-review-pair",
+      "无明确阶段边界、任务交叉重叠的场景",
+      "不需要严格顺序执行、各 agent 可独立操作的场景"
+    ]
+  },
+
+  "decision_tree": {
+    "root": {
+      "id": "start",
+      "question_cn": "你的工作流是否有明确的阶段划分（前一阶段的产出是后一阶段的输入）？",
+      "question_en": "Does your workflow have clearly defined stages where each stage's output is the next stage's input?",
+      "yes": "check_stage_count",
+      "no": "reject_pipeline"
+    },
+    "check_stage_count": {
+      "id": "check_stage_count",
+      "question_cn": "有多少个阶段（即多少个 agent）？",
+      "question_en": "How many stages (agents) do you need?",
+      "options": {
+        "2": "warn_minimal_pipeline",
+        "3_to_5": "check_stage_dependency",
+        "6_plus": "check_stage_grouping"
+      }
+    },
+    "check_stage_dependency": {
+      "id": "check_stage_dependency",
+      "question_cn": "每个阶段是否**必须**等待前一个阶段完成后才能开始（严格顺序依赖）？",
+      "question_en": "Must each stage wait for the previous stage to complete before starting (strict sequential dependency)?",
+      "yes": "check_quality_gate",
+      "no_partial": "recommend_pipeline_with_parallel_hint"
+    },
+    "check_quality_gate": {
+      "id": "check_quality_gate",
+      "question_cn": "流水线末尾是否需要一个专门的质量检查 agent 来验证最终产出？",
+      "question_en": "Does the pipeline need a dedicated quality-check agent at the end?",
+      "yes": "recommend_pipeline",
+      "no": "warn_no_quality_gate"
+    },
+    "check_stage_grouping": {
+      "id": "check_stage_grouping",
+      "question_cn": "6+ 阶段流水线较长——是否可以将某些阶段合并（减少 agent 数量）？",
+      "question_en": "With 6+ stages, can some be merged to reduce agent count?",
+      "yes": "recommend_pipeline_merged",
+      "no": "warn_long_pipeline"
+    },
+    "decisions": {
+      "recommend_pipeline": {
+        "id": "recommend_pipeline",
+        "result": "strongly_recommend",
+        "recommendation_cn": "强烈推荐使用 Sequential Pipeline 模式。",
+        "reason_cn": "你的工作流具备明确的阶段划分、严格的顺序依赖、末尾有质量检查 agent——这正是链式 Handoff 拓扑的理想场景。",
+        "next_steps_cn": [
+          "定义每个阶段的 agent：名称、角色、职责",
+          "定义阶段间的 handoff 格式和内容标准",
+          "配置末尾质检 agent 的验证维度",
+          "设置 Completion Gate：末尾 agent 全面验证无问题 -> CONVERGED",
+          "配置回退路由：P0->Agent-1, P1->最早涉及 agent, P2->前一个 agent",
+          "设置硬止损：默认 max_cycles=5（回退次数）, convergence_rounds=1"
+        ]
+      },
+      "recommend_pipeline_merged": {
+        "id": "recommend_pipeline_merged",
+        "result": "recommend_with_modification",
+        "recommendation_cn": "推荐 Sequential Pipeline 模式——合并阶段后使用。",
+        "reason_cn": "合并阶段后减少 agent 数量（建议 3-5 个），降低 handoff 链过长导致的信息丢失风险。",
+        "next_steps_cn": [
+          "将相关阶段合并（如将'代码评审'和'安全扫描'合并到一个 agent）",
+          "确保合并后的每个 agent 职责明确且不过载"
+        ]
+      },
+      "recommend_pipeline_with_parallel_hint": {
+        "id": "recommend_pipeline_with_parallel_hint",
+        "result": "recommend_with_caveat",
+        "recommendation_cn": "推荐 Sequential Pipeline 模式，但部分阶段可并行——考虑 Orchestrator+Worker 混合。",
+        "reason_cn": "如果某些阶段可以并行执行，可以考虑在流水线的某个阶段使用 Orchestrator 派发并行子任务（嵌套模式）。",
+        "caveat_cn": "Sequential Pipeline 的核心假设是严格顺序依赖。如果大量阶段可并行，Orchestrator+Worker 模式可能更合适。"
+      },
+      "reject_pipeline": {
+        "id": "reject_pipeline",
+        "result": "not_recommended",
+        "recommendation_cn": "不推荐 Sequential Pipeline 模式——工作流缺乏明确的阶段性。",
+        "reason_cn": "Sequential Pipeline 需要明确的阶段边界（前一阶段产出 = 后一阶段输入）。如果你的工作流是探索性的、迭代性的或 agent 需要频繁交互，请考虑其他模式。",
+        "alternative_modes": ["orchestrator-worker", "peer-review-pair"]
+      },
+      "warn_minimal_pipeline": {
+        "id": "warn_minimal_pipeline",
+        "result": "acceptable_but_overkill",
+        "recommendation_cn": "可使用 Sequential Pipeline，但仅 2 个阶段的流水线较为简单——考虑 peer-review-pair 是否更合适。",
+        "reason_cn": "2 个阶段的流水线本质上与 Peer Review Pair 类似（A 产出 -> B 验证）。如果 B 的验证包含反馈循环，peer-review-pair 可能更合适。",
+        "alternative_modes": ["peer-review-pair"]
+      },
+      "warn_no_quality_gate": {
+        "id": "warn_no_quality_gate",
+        "result": "recommend_with_caveat",
+        "recommendation_cn": "推荐 Sequential Pipeline，但缺少专门的质量检查 agent——建议将最后一个 agent 同时赋予质检职责。",
+        "reason_cn": "如果没有专门的质检 agent，收敛判定将缺少明确的责任方。建议让第 N 个 agent 兼任质量检查，或增加一个专门的质检 agent。",
+        "caveat_cn": "缺少质检 agent 可能导致收敛条件模糊——请确保最后一个 agent 的提示词中明确包含验证和收敛判定指令。"
+      },
+      "warn_long_pipeline": {
+        "id": "warn_long_pipeline",
+        "result": "recommend_with_caution",
+        "recommendation_cn": "6+ 阶段的流水线较长，建议增加中间验证点并限制最大回退次数。",
+        "reason_cn": "长流水线的风险：handoff 链过长导致上下文丢失、回退成本高昂、末尾 agent 验证负担过重。",
+        "next_steps_cn": [
+          "在中间阶段（如第 3 阶段后）增加中间验证点",
+          "限制 max_cycles=3 以控制回退成本",
+          "考虑拆分为多个较短流水线（微流水线架构）"
+        ]
+      }
+    }
+  },
+
+  "configuration_defaults": {
+    "max_cycles": 5,
+    "convergence_rounds": 1,
+    "max_duration_minutes": 60,
+    "pipeline_agent_permissions": {
+      "sessions_spawn": false,
+      "sessions_send": true,
+      "file_read": true,
+      "file_write": true
+    },
+    "routing_topology_note_cn": "Agent-1 -> Agent-2 -> ... -> Agent-N（sessions_send handoff）; Agent-N -> Agent-1（P0 回退）"
+  },
+
+  "completion_gate": {
+    "description_cn": "流水线末尾的质检 agent 在收到上游 handoff 后执行全面验证，判定是否通过。",
+    "condition_cn": "若全面验证未发现任何 P0/P1/P2 问题，则判定流水线完成。单次验证通过即收敛（convergence_rounds=1），无需多轮。",
+    "reply_format": "CONVERGED: 流水线完成。所有阶段产出均通过验证。"
+  },
+
+  "fallback_routing": {
+    "p0_cn": "末尾 agent -> Agent-1（流水线起点）—— 从头修正。message_type: FALLBACK, priority: critical",
+    "p1_cn": "末尾 agent -> 最早涉及该问题的 agent —— 定向修正",
+    "p2_cn": "末尾 agent -> 前一个 agent（就近修正）。message_type: FALLBACK, priority: low",
+    "pipeline_exhausted_cn": "达到 max_cycles 回退次数 -> PIPELINE_EXHAUSTED — 停止流水线并请求人工介入"
+  },
+
+  "handoff_format": {
+    "description_cn": "每个阶段完成后向下一个 agent 发送的标准 handoff 消息。",
+    "format": {
+      "type": "HANDOFF",
+      "from": "[当前 agent_id]",
+      "to": "[下一个 agent_id]",
+      "content_cn": "handoff: [阶段名] 完成。产出位于 [路径]。下一阶段: [阶段名]。",
+      "context_cn": "附带上游阶段的上下文摘要——确保下游 agent 无需回溯整个对话即可理解当前状态。"
+    }
+  }
+}

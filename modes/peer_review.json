@@ -1,0 +1,161 @@
+{
+  "_comment": "============================================================",
+  "_comment2": "modes/peer_review.json — Peer Review Pair 模式决策树",
+  "_comment3": "双向审查拓扑：A <-> B 交替产出与审查",
+  "_comment4": "适用场景：需要交叉审查的高质量任务",
+  "_comment5": "收敛机制：双方均无新 review 意见 -> 收敛",
+  "_comment6": "============================================================",
+
+  "mode": {
+    "id": "peer-review-pair",
+    "name_cn": "Peer Review Pair 模式",
+    "name_en": "Peer Review Pair Mode",
+    "topology": "bidirectional-review-pair",
+    "description": "两个对等 agent 交替扮演生产者和审查者，双向审查对方的产出，直到双方一致认为产出完整且无问题。",
+    "applicable_scenarios": [
+      "代码审查工作流——两个 agent 互相审查代码质量和正确性",
+      "文档审校——一个 agent 编写，另一个 agent 逐段审校",
+      "设计方案论证——两个 agent 分别提出方案并互相挑刺",
+      "翻译审校——一个 agent 翻译，另一个 agent 审校准确性",
+      "安全审计——两个 agent 分别从攻击者和防御者角度审查"
+    ],
+    "not_applicable_scenarios": [
+      "需要超过 2 个 agent 协作的场景——使用 orchestrator-worker",
+      "严格顺序执行的流水线——使用 sequential-pipeline",
+      "有明显主从关系的场景——使用 orchestrator-worker",
+      "需要外部第三方仲裁的场景——Peer Review Pair 本质上只有两方"
+    ]
+  },
+
+  "decision_tree": {
+    "root": {
+      "id": "start",
+      "question_cn": "你的多 agent 协作场景中恰好需要 2 个 agent 吗？",
+      "question_en": "Does your multi-agent scenario require exactly 2 agents?",
+      "yes": "check_role_equality",
+      "no_more": "warn_more_than_two",
+      "no_fewer": "warn_only_one"
+    },
+    "check_role_equality": {
+      "id": "check_role_equality",
+      "question_cn": "这两个 agent 的角色是否对等（无明确的上下级关系）？",
+      "question_en": "Are the two agents equal peers (no clear hierarchy)?",
+      "yes": "check_iterative_improvement",
+      "no": "recommend_orchestrator_instead"
+    },
+    "check_iterative_improvement": {
+      "id": "check_iterative_improvement",
+      "question_cn": "这两个 agent 的任务是否需要多轮迭代改进（不是一次性完成）？",
+      "question_en": "Does the task require multiple rounds of iterative improvement (not one-shot)?",
+      "yes": "check_alternating_roles",
+      "no": "warn_single_pass"
+    },
+    "check_alternating_roles": {
+      "id": "check_alternating_roles",
+      "question_cn": "两个 agent 是否能交替扮演生产者和审查者（角色在每次 handoff 时切换）？",
+      "question_en": "Can both agents alternate between producer and reviewer roles?",
+      "yes": "recommend_peer_review",
+      "no": "recommend_single_role_review"
+    },
+    "decisions": {
+      "recommend_peer_review": {
+        "id": "recommend_peer_review",
+        "result": "strongly_recommend",
+        "recommendation_cn": "强烈推荐使用 Peer Review Pair 模式。",
+        "reason_cn": "你的场景具备 2 个对等 agent、需要多轮迭代改进、双方可交替扮演生产者和审查者——这正是双向审查拓扑的理想场景。交叉审查可以有效提高产出质量。",
+        "next_steps_cn": [
+          "定义 Agent A 和 Agent B 的角色和审查能力",
+          "定义双方的审查维度：正确性、完整性、安全性、性能、可维护性",
+          "设置 Completion Gate：本轮+上轮双方均无新 P0/P1/P2 即收敛",
+          "配置判定话术：CONVERGED / APPROVED / BLOCKED / REVISION_NEEDED / SUGGESTIONS",
+          "设置僵局处理：连续多轮审查不一致 -> STALEMATE -> 人工裁决",
+          "设置硬止损：默认 max_cycles=8, convergence_rounds=2"
+        ]
+      },
+      "recommend_single_role_review": {
+        "id": "recommend_single_role_review",
+        "result": "recommend_with_caveat",
+        "recommendation_cn": "可以使用 Peer Review Pair 模式，但建议设定固定的生产者/审查者角色。",
+        "reason_cn": "如果两个 agent 不能交替切换角色（一个永远负责生产，另一个永远负责审查），Peer Review Pair 仍可使用，但收敛判定会有所不同——仅审查者判断通过即可。",
+        "caveat_cn": "固定角色模式下，生产者不会审查审查者的反馈——可能导致回退循环。建议在审查者的审查意见中附带修改建议，减少生产者理解偏差。"
+      },
+      "warn_more_than_two": {
+        "id": "warn_more_than_two",
+        "result": "not_recommended",
+        "recommendation_cn": "不推荐 Peer Review Pair 模式——超过 2 个 agent 时建议使用 Orchestrator+Worker。",
+        "reason_cn": "Peer Review Pair 专为 2 个对等 agent 设计。3 个或更多 agent 的互相审查会形成复杂的多对多审查矩阵，难以判定收敛。建议使用 Orchestrator+Worker 模式，由 Orchestrator 统一协调多个 Worker。",
+        "alternative_modes": ["orchestrator-worker"]
+      },
+      "warn_only_one": {
+        "id": "warn_only_one",
+        "result": "not_recommended",
+        "recommendation_cn": "不推荐 Peer Review Pair 模式——仅 1 个 agent 无法构成审查对。",
+        "reason_cn": "Peer Review Pair 至少需要 2 个 agent。仅 1 个 agent 的场景建议使用 sequential-pipeline（单 agent 流水线）或直接使用单个 agent 的 standalone 模式。",
+        "alternative_modes": ["sequential-pipeline"]
+      },
+      "recommend_orchestrator_instead": {
+        "id": "recommend_orchestrator_instead",
+        "result": "not_recommended",
+        "recommendation_cn": "不推荐 Peer Review Pair——存在明确的上下级关系时建议使用 Orchestrator+Worker。",
+        "reason_cn": "Peer Review Pair 假定两个 agent 角色对等。如果有明确的上下级关系（一个分配任务、一个执行），Orchestrator+Worker 模式更合适。",
+        "alternative_modes": ["orchestrator-worker"]
+      },
+      "warn_single_pass": {
+        "id": "warn_single_pass",
+        "result": "acceptable_but_overkill",
+        "recommendation_cn": "可以使用 Peer Review Pair，但可能过于复杂——单轮审查场景下 sequential-pipeline 可能更简洁。",
+        "reason_cn": "Peer Review Pair 的优势在于多轮迭代改进。如果任务本质上只需要一轮审查（生产者产出 -> 审查者确认 -> 完成），sequential-pipeline 的链式 handoff 更直观。",
+        "alternative_modes": ["sequential-pipeline"]
+      }
+    }
+  },
+
+  "configuration_defaults": {
+    "max_cycles": 8,
+    "convergence_rounds": 2,
+    "max_duration_minutes": 60,
+    "peer_permissions": {
+      "sessions_spawn": false,
+      "sessions_send": true,
+      "file_read": true,
+      "file_write": true
+    },
+    "routing_topology_note_cn": "Peer A <-> Peer B 双向 sessions_send，无 sessions_spawn。"
+  },
+
+  "completion_gate": {
+    "description_cn": "审查者在每轮审查后执行收敛判定。",
+    "condition_cn": "若本轮+上一轮双方审查均未发现任何 P0/P1/P2 问题，则判定任务完成。",
+    "reply_format": "CONVERGED: 双方审查一致通过。本轮审查结果: P0=0, P1=0, P2=0。"
+  },
+
+  "review_verdicts": {
+    "approved": {
+      "condition_cn": "本轮无新发现，但上一轮对方有发现",
+      "reply": "APPROVED: 本轮无新发现。请对方确认上轮问题已修复。"
+    },
+    "blocked": {
+      "condition_cn": "发现 P0 致命问题",
+      "reply": "BLOCKED: P0 问题。请重新从头开始。问题: [清单]"
+    },
+    "revision_needed": {
+      "condition_cn": "发现 P1 严重问题",
+      "reply": "REVISION_NEEDED: P1 问题。请修复后重新提交。问题: [清单]"
+    },
+    "suggestions": {
+      "condition_cn": "仅发现 P2 轻微问题",
+      "reply": "SUGGESTIONS: P2 问题。可在下轮一并修复。问题: [清单]"
+    },
+    "stalemate": {
+      "condition_cn": "连续多轮双方审查结果不一致",
+      "reply": "STALEMATE: 双方多轮审查仍无法达成一致。建议人工裁决。"
+    }
+  },
+
+  "fallback_routing": {
+    "p0_cn": "审查者回复 BLOCKED，要求对方从头开始",
+    "p1_cn": "审查者回复 REVISION_NEEDED，要求对方修复后重新提交",
+    "p2_cn": "审查者回复 SUGGESTIONS，标记可选修复",
+    "stalemate_cn": "任一方回复 STALEMATE，停止循环等待人工介入"
+  }
+}

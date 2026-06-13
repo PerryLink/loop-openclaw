@@ -1,0 +1,86 @@
+{
+  "$schema": "https://loop-openclaw/schemas/config-plan.json",
+  "description": "Sequential-Pipeline 模式示例配置计划 —— 设计->实施->测试流水线",
+  "project_name": "design-build-test",
+  "mode": "sequential-pipeline",
+  "max_cycles": 5,
+  "max_duration_minutes": 180,
+  "convergence_rounds": 1,
+  "agents": [
+    {
+      "agent_id": "designer",
+      "role": "pipeline_stage",
+      "description": "设计师（阶段 1）：分析需求产出技术设计方案并 handoff 给 builder",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["builder"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "file_write": true
+      },
+      "tools": ["file_read", "file_write", "sessions_send"],
+      "persona_traits": ["系统性思维", "抽象能力", "预见性"],
+      "boundaries": ["不得直接编写实现代码", "设计方案需包含验收标准"]
+    },
+    {
+      "agent_id": "builder",
+      "role": "pipeline_stage",
+      "description": "实施者（阶段 2）：根据设计方案编写代码并 handoff 给 tester",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["tester"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "file_write": true,
+        "command_exec": true
+      },
+      "tools": ["file_read", "file_write", "command_exec", "sessions_send"],
+      "persona_traits": ["工程实践", "代码质量", "遵循设计"],
+      "boundaries": ["不得擅自偏离设计方案", "修改设计需回退至 designer"]
+    },
+    {
+      "agent_id": "tester",
+      "role": "pipeline_stage",
+      "description": "测试者（阶段 3，末尾质量检查）：验证 builder 产出，判定收敛或回退",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["designer", "builder"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "command_exec": true
+      },
+      "tools": ["file_read", "command_exec", "sessions_send"],
+      "persona_traits": ["怀疑精神", "系统覆盖", "精确报告"],
+      "boundaries": ["不得直接修改代码", "回退路由由问题级别决定"]
+    }
+  ],
+  "channels": [
+    {
+      "id": "default",
+      "type": "console",
+      "config": {},
+      "routing_rules": {
+        "inbound": {"default_agent": "designer"},
+        "outbound": {"enabled": true, "format": "markdown"}
+      }
+    }
+  ],
+  "convergence_criteria": {
+    "P0": "设计缺陷或阻断性 bug —— 回退至 designer（Agent-1）重新设计",
+    "P1": "实现偏差 —— 回退至最早涉及的 agent",
+    "P2": "微小问题 —— 回退至前一个 agent",
+    "rule": "末尾 tester 执行全面验证，未发现 P0/P1/P2 问题 → 流水线收敛"
+  },
+  "routing_rules": [
+    {"source": "designer", "target": "builder", "method": "sessions_send", "condition": "设计完成后 handoff", "priority": "high"},
+    {"source": "builder", "target": "tester", "method": "sessions_send", "condition": "实施完成后 handoff", "priority": "high"},
+    {"source": "tester", "target": "designer", "method": "sessions_send", "condition": "P0 回退至起点", "priority": "critical"},
+    {"source": "tester", "target": "builder", "method": "sessions_send", "condition": "P1/P2 回退修复", "priority": "normal"}
+  ],
+  "extra": {
+    "model_provider": "anthropic",
+    "temperature": 0.7,
+    "max_tokens": 4096,
+    "pipeline_exhausted_instruction": "PIPELINE_EXHAUSTED: 达到最大回退次数 5 次，请求人工介入"
+  }
+}

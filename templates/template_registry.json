@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Template variable registry for loop-openclaw render.py",
+  "variables": {
+    "project_name": {
+      "type": "str",
+      "required": true,
+      "description": "Project name used in headers and output filenames"
+    },
+    "mode": {
+      "type": "str",
+      "required": true,
+      "enum": ["orchestrator-worker", "peer-review-pair", "sequential-pipeline"],
+      "description": "Loop topology mode"
+    },
+    "mode_description": {
+      "type": "str",
+      "required": false,
+      "default": "",
+      "description": "Human-readable description of the selected mode"
+    },
+    "agent_topology": {
+      "type": "list",
+      "required": true,
+      "default": [],
+      "description": "Alias for agents - the agent topology list"
+    },
+    "agents": {
+      "type": "list",
+      "required": true,
+      "description": "List of agent specification dicts",
+      "item_schema": {
+        "id": {"type": "str", "required": true},
+        "role": {"type": "str", "required": true},
+        "description": {"type": "str", "required": false, "default": ""},
+        "model": {"type": "str", "required": false, "default": ""},
+        "permissions": {"type": "dict", "required": false, "default": {}},
+        "tools": {"type": "list", "required": false, "default": []},
+        "persona_traits": {"type": "list", "required": false, "default": []},
+        "boundaries": {"type": "list", "required": false, "default": []}
+      }
+    },
+    "channels": {
+      "type": "list",
+      "required": true,
+      "default": [{"id": "default", "type": "console"}],
+      "description": "OpenClaw Gateway channel configurations"
+    },
+    "convergence_criteria": {
+      "type": "dict",
+      "required": true,
+      "description": "Structured convergence criteria (P0/P1/P2 rules, rounds, etc.)"
+    },
+    "convergence_rounds": {
+      "type": "int",
+      "required": false,
+      "default": 3,
+      "description": "Number of consecutive zero-new-finding rounds needed to converge"
+    },
+    "max_cycles": {
+      "type": "int",
+      "required": false,
+      "default": 10,
+      "description": "Hard stop: maximum number of loop iterations"
+    },
+    "max_duration_minutes": {
+      "type": "int",
+      "required": false,
+      "default": 60,
+      "description": "Hard stop: maximum wall-clock duration"
+    },
+    "routing_rules": {
+      "type": "list",
+      "required": false,
+      "default": [],
+      "description": "Agent-to-agent routing rules (source -> target)"
+    },
+    "hard_stop_instructions": {
+      "type": "str",
+      "required": false,
+      "default": "",
+      "description": "Hard-stop natural language instructions embedded in AGENTS.md"
+    },
+    "completion_gate_text": {
+      "type": "str",
+      "required": false,
+      "default": "",
+      "description": "Completion Gate natural language text for AGENTS.md"
+    },
+    "escape_detection_text": {
+      "type": "str",
+      "required": false,
+      "default": "",
+      "description": "Escape-detection natural language instructions for AGENTS.md"
+    },
+    "orchestrator_id": {
+      "type": "str",
+      "required": false,
+      "default": "",
+      "description": "Agent ID of the orchestrator (derived from agent list)"
+    },
+    "worker_ids": {
+      "type": "list",
+      "required": false,
+      "default": [],
+      "description": "Agent IDs of workers (derived from agent list)"
+    },
+    "model_provider": {
+      "type": "str",
+      "required": false,
+      "default": "anthropic",
+      "description": "Default model provider (anthropic, openai, google, etc.)"
+    },
+    "model_name": {
+      "type": "str",
+      "required": false,
+      "default": "claude-sonnet-4-20250514",
+      "description": "Default model name"
+    },
+    "temperature": {
+      "type": "num",
+      "required": false,
+      "default": 0.7,
+      "description": "Default model temperature"
+    },
+    "max_tokens": {
+      "type": "int",
+      "required": false,
+      "default": 4096,
+      "description": "Default maximum output tokens"
+    },
+    "generated_at": {
+      "type": "str",
+      "required": false,
+      "default": "",
+      "description": "ISO-8601 timestamp of generation (auto-filled)"
+    },
+    "generator_version": {
+      "type": "str",
+      "required": false,
+      "default": "1.0.0",
+      "description": "Version of the loop-openclaw renderer"
+    }
+  }
+}

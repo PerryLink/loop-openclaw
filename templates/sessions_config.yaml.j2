@@ -1,0 +1,84 @@
+{# ============================================================ #}
+{# sessions_config.yaml.j2 — OpenClaw Gateway 会话配置模板      #}
+{# 定义 agent 会话的超时、并发、重试策略                         #}
+{# 与 openclaw.json 中的 gateway.session_timeout 协同作用        #}
+{# ============================================================ #}
+# ============================================================
+# {{ project_name }} — Gateway 会话配置
+# 由 loop-openclaw 配置生成器自动生成
+# Loop 模式: {{ mode }}
+# 生成时间: {{ generated_at }}
+# ============================================================
+
+# ------------------------------------------------------------
+# 全局会话设置
+# ------------------------------------------------------------
+global:
+  # 会话默认超时时间（秒）——超过此时间无活动则自动关闭
+  default_timeout_seconds: {{ max_duration_minutes * 60 }}
+  # 单个 agent 最大并发会话数
+  max_concurrent_sessions: {{ agents | length * 2 }}
+  # 会话空闲超时（秒）——无消息即关闭
+  idle_timeout_seconds: 600
+  # 会话历史消息保留数量
+  max_history_messages: 100
+
+# ------------------------------------------------------------
+# Agent 会话策略
+# ------------------------------------------------------------
+agents:
+{% for agent in agents %}
+  {{ agent.id }}:
+    # {{ agent.role }} — {{ agent.description or "无描述" }}
+    session:
+      # 该 agent 的最大并发会话数
+      max_concurrent: {% if agent.role == "orchestrator" %}{{ agents | length }}{% else %}2{% endif %}
+      # 会话超时（秒）
+      timeout_seconds: {% if agent.role == "orchestrator" %}{{ max_duration_minutes * 60 }}{% else %}1800{% endif %}
+      # 开启新会话时的初始系统提示词文件
+      persona_files:
+        - SOUL.md
+        - IDENTITY.md
+        - TOOLS.md
+      # 编排指令文件（含收敛条件）
+      orchestration_file: AGENTS.md
+    # 通信重试策略
+    retry:
+      # 最大重试次数
+      max_retries: 3
+      # 重试间隔（秒）——指数退避
+      backoff_base_seconds: 2
+      # 超时类错误的退避乘数
+      backoff_multiplier: 2
+{% endfor %}
+
+# ------------------------------------------------------------
+# 频道会话绑定
+# ------------------------------------------------------------
+channels:
+{% for channel in channels %}
+  {{ channel.id }}:
+    # 频道类型: {{ channel.type or "console" }}
+    type: {{ channel.type or "console" }}
+    # 绑定的默认 agent
+    default_agent: {{ channel.get("routing_rules", {}).get("inbound", {}).get("default_agent", agents[0].id if agents else "default") }}
+    # 频道级会话超时覆盖
+    session_timeout_seconds: 3600
+    # 自动回复（当所有 agent 繁忙时）
+    busy_response: "所有 agent 当前正忙，请稍后再试。"
+{% endfor %}
+
+# ------------------------------------------------------------
+# Loop 控制参数
+# ------------------------------------------------------------
+loop_control:
+  # 最大循环轮次——超过此值触发 HARD_STOP
+  max_cycles: {{ max_cycles }}
+  # 收敛所需连续轮次
+  convergence_rounds: {{ convergence_rounds }}
+  # 最大运行时长（分钟）
+  max_duration_minutes: {{ max_duration_minutes }}
+  # 消息确认超时（秒）
+  message_ack_timeout_seconds: 30
+  # 逃逸检测——连续多少轮无进展触发 ESCAPE_DETECTED
+  escape_detection_rounds: 2

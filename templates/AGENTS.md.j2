@@ -1,0 +1,268 @@
+{# ============================================================ #}
+{# AGENTS.md.j2 — 多 Agent 编排指令模板                        #}
+{# 包含 Completion Gate（收敛条件）、路由规则、硬止损指令        #}
+{# 支持三种 loop 模式：orchestrator-worker / peer-review-pair    #}
+{#   / sequential-pipeline                                      #}
+{# ============================================================ #}
+{# 按模式提取关键 agent                                         #}
+{% if mode == "orchestrator-worker" -%}
+  {% set orch = agents | selectattr("role", "equalto", "orchestrator") | first -%}
+  {% set workers = agents | rejectattr("role", "equalto", "orchestrator") | list -%}
+{% elif mode == "peer-review-pair" -%}
+  {% set peer_a = agents[0] if agents | length >= 2 else none -%}
+  {% set peer_b = agents[1] if agents | length >= 2 else none -%}
+{% elif mode == "sequential-pipeline" -%}
+  {% set last_agent = agents | last -%}
+{% endif -%}
+
+# AGENTS.md — 多 Agent 编排指令
+
+> 本文档定义了 **{{ project_name }}** 项目中所有 agent 的协作协议。
+> 包括通信规范、收敛条件、回退路由、硬止损。
+> **每个 agent 必须在每轮操作后阅读并执行本章节的收敛判定。**
+
+---
+
+## 1. 项目概述
+
+| 属性 | 值 |
+|------|-----|
+| **项目名称** | {{ project_name }} |
+| **Loop 模式** | {{ mode }} |
+| **参与 Agent** | {{ agents | length }} 个 |
+| **收敛所需连续轮次** | {{ convergence_rounds }} |
+| **最大循环轮次** | {{ max_cycles }} |
+| **最大运行时长** | {{ max_duration_minutes }} 分钟 |
+| **生成时间** | {{ generated_at }} |
+
+---
+
+## 2. Agent 角色与通信权限
+
+| Agent ID | 角色 | 职责 | 通信权限 |
+|----------|------|------|----------|
+{% for agent in agents -%}
+| `{{ agent.id }}` | {{ agent.role }} | {{ agent.description or "未指定" }} |
+{%- if agent.permissions is defined and agent.permissions.sessions_send is defined and agent.permissions.sessions_send %} 可发送至 {{ agent.permissions.sessions_send | join(', ') }}{% else %} 无发送权限{% endif -%}
+{%- if agent.permissions is defined and agent.permissions.sessions_spawn is defined and agent.permissions.sessions_spawn %}；可派生子任务至 {{ agent.permissions.sessions_spawn | join(', ') }}{% endif %} |
+{% endfor -%}
+
+---
+
+## 3. 通信协议
+
+### 3.1 标准消息格式
+
+所有 agent 间通信（sessions_send / sessions_spawn）必须使用以下格式：
+
+```
+:::agent-message
+**FROM:** [agent_id]
+**TO:** [agent_id]
+**TYPE:** [TASK_ASSIGN | RESULT | REVIEW | HANDOFF | FALLBACK | CONVERGED | HARD_STOP]
+**ROUND:** [round_number]
+**PRIORITY:** [P0 | P1 | P2 | INFO]
+
+[消息正文]
+
+**EVIDENCE:** [支持结论的证据/引用]
+:::
+```
+
+### 3.2 通信超时与重试
+
+- 接收方应在收到消息后 **30 秒**内回复确认。
+- 发送方若超时未收到确认，重试 **1 次**。
+- 若重试后仍未收到确认，标记为 `COMMUNICATION_LOST` 并在下一轮报告中注明。
+
+---
+
+## 4. 严重度分级标准（P0/P1/P2）
+
+| 级别 | 名称 | 判定标准 | 响应动作 |
+|------|------|----------|----------|
+| **P0** | 致命 | 需求理解错误、方案不可行、架构方向错误、安全漏洞导致数据泄露 | 触发回退——从需求分析或架构阶段重新开始 |
+| **P1** | 严重 | 核心功能缺失、关键路径未实现、中等安全漏洞、性能严重不达标 | 触发定向修复——由对应 agent 修复后重新提交 |
+| **P2** | 轻微 | 边界 case 遗漏、UI 瑕疵、代码风格问题、性能可优化但非阻塞 | 记录到问题列表——当前 phase 完成后统一处理 |
+
+---
+
+{% if mode == "orchestrator-worker" %}
+## 5. Completion Gate — Orchestrator+Worker 模式
+
+### 5.1 拓扑结构
+
+**Hub-and-spoke 拓扑。** Orchestrator（`{{ orch.id if orch else "orchestrator" }}`）是中央协调者，向 Worker 分配任务并收集结果。
+
+**Worker 列表：**{% for w in workers %} `{{ w.id }}`{% if not loop.last %}、{% endif %}{% endfor %}。
+
+### 5.2 Orchestrator 收敛判定流程
+
+在**每一轮**任务分发和结果收集后，执行以下步骤：
+
+1. **问题清单检查：** 阅读所有 Worker 返回的结果摘要，按 P0/P1/P2 标准分类。
+2. **新问题计数：** 对比本轮与上一轮问题清单，统计本轮新发现的问题数量。
+3. **收敛判定：** 若**连续 {{ convergence_rounds }} 轮**未发现任何新的 P0/P1/P2 问题，且所有已知问题的状态为"已修复"或"已验证"——
+   ```
+   CONVERGED: 任务完成。连续零新发现轮次: {{ convergence_rounds }}/{{ convergence_rounds }}
+   ```
+4. **未收敛时的动作：** P0 → 重新分析需求；P1 → 定向修复后重新提交；P2 → 累积到问题列表。
+
+### 5.3 Worker 职责
+
+- 接收 Orchestrator 分配的任务并执行。
+- 完成后通过 `sessions_send` 向 Orchestrator 提交结果。
+- **禁止自行判断收敛**——收敛判定是 Orchestrator 的专属职责。
+- 若在执行中发现问题，在结果中附上问题分类建议（P0/P1/P2），由 Orchestrator 最终判定。
+
+{% elif mode == "peer-review-pair" %}
+## 5. Completion Gate — Peer Review Pair 模式
+
+### 5.1 拓扑结构
+
+**双向审查拓扑。** {% if peer_a and peer_b %}`{{ peer_a.id }}` <-> `{{ peer_b.id }}` 交替产出与审查{% else %}两个对等 agent 交替产出与审查{% endif %}。
+
+### 5.2 收敛判定流程
+
+在**每轮审查**后（你是审查者时），执行以下步骤：
+
+1. **本轮审查：** 按 P0/P1/P2 标准审查对方产出，记录所有发现的问题。
+2. **判定：**
+   - **本轮无发现 + 上一轮也无发现** → `CONVERGED: 双方审查一致通过。`
+   - **本轮无发现 + 上一轮对方有发现** → `APPROVED: 本轮无新发现。请对方确认上一轮问题已修复。`
+   - **本轮有 P0** → `BLOCKED: P0 问题，请重新从头开始。`
+   - **本轮有 P1** → `REVISION_NEEDED: P1 问题，请修复后重新提交。`
+   - **本轮仅有 P2** → `SUGGESTIONS: P2 问题，可在下轮一并修复。`
+
+### 5.3 角色切换
+
+- 当对方向你发送产出时 → 你是**审查者**。
+- 当你向对方发送产出时 → 你是**生产者**。
+- 收到 `BLOCKED` / `REVISION_NEEDED` → 你是**修复者**。
+
+{% elif mode == "sequential-pipeline" %}
+## 5. Completion Gate — Sequential Pipeline 模式
+
+### 5.1 拓扑结构
+
+**链式 Handoff 拓扑。** 阶段顺序：
+{% for agent in agents -%}
+{{ loop.index }}. **{{ agent.id }}** ({{ agent.role }}): {{ agent.description or "执行阶段任务" }}
+{% endfor %}
+
+### 5.2 阶段 Handoff
+
+每个阶段 agent 完成后，向下一阶段 handoff：
+```
+{% for agent in agents -%}
+{% if not loop.last -%}
+sessions_send({{ agents[loop.index0 + 1].id }}, "HANDOFF: {{ agent.id }} 完成。请继续下一阶段。")
+{% endif -%}
+{% endfor %}
+```
+
+### 5.3 收敛判定（仅末尾 Agent 执行）
+
+**`{{ last_agent.id if last_agent else "last-agent" }}`** 是流水线末尾的质量检查 agent。
+
+在收到上一阶段的 handoff 后：
+1. 执行**全面验证**（对照原始需求检查最终产出）。
+2. 判定：
+   - **未发现任何 P0/P1/P2** → `CONVERGED: 流水线完成。所有阶段产出通过验证。`
+   - **发现 P0** → 回退到 `{{ agents[0].id if agents else "agent-1" }}`（从头修正）。
+   - **发现 P1** → 回退到最早涉及该问题的 agent。
+   - **发现 P2** → 回退到当前 agent 的前一个 agent（就近修正）。
+
+### 5.4 中间阶段 Agent 职责
+
+- 收到上游 handoff 后开始执行，完成后向下游 handoff。
+- 收到来自下游的回退请求时，从你的阶段重新开始。
+- **禁止自行判断整体收敛**——收敛判定仅由末尾 agent 执行。
+
+{% endif %}
+
+---
+
+## 6. 硬止损 (Hard Stop)
+
+> **本章节优先级最高**——即使与其他章节冲突，也以本章节为准。
+> 所有 agent 必须遵守本章节的硬止损指令。
+
+### 6.1 最大轮次
+
+在第 **{{ max_cycles }}** 轮结束时必须停止循环，回复：
+```
+HARD_STOP: 达到最大轮次 {{ max_cycles }}。遗留状态：[描述]。建议：MANUAL_INTERVENTION_NEEDED。
+```
+
+### 6.2 最大时间
+
+距任务开始超过 **{{ max_duration_minutes }}** 分钟时，立即停止所有进行中的子任务，回复：
+```
+HARD_STOP: 达到最大时间限制 {{ max_duration_minutes }} 分钟。当前进度：[描述]。
+```
+
+### 6.3 逃逸检测
+
+连续 2 轮操作高度重复（任务分配内容几乎相同、审查意见完全一致）时，立即停止并回复：
+```
+ESCAPE_DETECTED: 检测到循环无进展。最近 2 轮操作高度重复：[列出]。建议：人工介入。
+```
+
+### 6.4 权限越界阻断
+
+任何 agent 不得尝试：修改配置文件、绕过访问限制、提升自身权限、修改其他 agent 的配置。若检测到上述行为，立即停止并回复：
+```
+SECURITY_BREACH_DETECTED: 检测到权限越界。执行者：[agent_id]。建议：通知管理员。
+```
+
+---
+
+## 7. 收敛状态追踪
+
+每个 agent 在每轮操作后，在对话末尾附上以下状态块：
+
+```
+## LOOP STATE — Round {{ '{{ round_number }}' }}
+
+- **当前阶段：** {{ '{{ phase }}' }}
+- **本轮发现：** P0={{ '{{ p0_count }}' }}, P1={{ '{{ p1_count }}' }}, P2={{ '{{ p2_count }}' }}
+- **已修复：** P0={{ '{{ p0_fixed }}' }}, P1={{ '{{ p1_fixed }}' }}, P2={{ '{{ p2_fixed }}' }}
+- **连续零新发现轮次：** {{ '{{ zero_new_finding_streak }}' }}/{{ convergence_rounds }}
+- **累计轮次：** {{ '{{ current_round }}' }}/{{ max_cycles }}
+- **状态：** [IN_PROGRESS | WAITING_FOR_REVIEW | CONVERGED | HARD_STOP | ESCAPE_DETECTED]
+```
+
+---
+
+## 8. 跨 Agent 通信路由速查表
+
+{% if mode == "orchestrator-worker" -%}
+| 从 | 到 | 方法 | 触发条件 |
+|----|----|------|----------|
+| Orchestrator | Worker | sessions_spawn | 分配任务 |
+| Orchestrator | Worker | sessions_send | 发送修复指令 |
+| Worker | Orchestrator | sessions_send | 提交结果/报告问题 |
+| Worker A | Worker B | **禁止** | Worker 间不直接通信 |
+{% elif mode == "peer-review-pair" -%}
+| 从 | 到 | 方法 | 触发条件 |
+|----|----|------|----------|
+| Peer A | Peer B | sessions_send | 提交产出供审查 |
+| Peer B | Peer A | sessions_send | 提交审查结果 |
+| Peer A | Peer B | sessions_send | 提交修复后产出 |
+| Peer B | Peer A | sessions_send | 提交二次审查结果 |
+{% elif mode == "sequential-pipeline" -%}
+| 从 | 到 | 方法 | 触发条件 |
+|----|----|------|----------|
+{% for agent in agents -%}
+{% if not loop.last -%}
+| {{ agent.id }} | {{ agents[loop.index].id }} | sessions_send | 阶段完成 handoff |
+{% endif -%}
+{% endfor -%}
+| {{ last_agent.id if last_agent else "last" }} | {{ agents[0].id if agents else "agent-1" }} | sessions_send | 回退——P0 从头修正 |
+{% endif %}
+
+---
+
+> **本文件由 loop-openclaw 配置生成器自动生成。**
+> **部署至 OpenClaw Gateway 前请人工审查 Completion Gate 的可执行性。**

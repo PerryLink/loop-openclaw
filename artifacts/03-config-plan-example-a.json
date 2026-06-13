@@ -1,0 +1,84 @@
+{
+  "$schema": "https://loop-openclaw/schemas/config-plan.json",
+  "description": "Orchestrator-Worker 模式示例配置计划 —— bug 修复工作流",
+  "project_name": "bug-fix-loop",
+  "mode": "orchestrator-worker",
+  "max_cycles": 10,
+  "max_duration_minutes": 120,
+  "convergence_rounds": 3,
+  "agents": [
+    {
+      "agent_id": "orchestrator",
+      "role": "orchestrator",
+      "description": "总指挥：将 bug 报告分解为子任务分配给 implementer，收集 tester 结果判定收敛",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["implementer", "tester"],
+        "sessions_spawn": ["implementer", "tester"],
+        "file_read": true
+      },
+      "tools": ["session_read", "session_write", "sessions_send", "sessions_spawn"],
+      "persona_traits": ["严谨", "系统化思维", "善于分解复杂问题"],
+      "boundaries": ["不得直接修改代码", "不得越权执行 Worker 的修复任务"]
+    },
+    {
+      "agent_id": "implementer",
+      "role": "worker",
+      "description": "实施者：根据 orchestrator 分配的任务分析并修复代码 bug",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["orchestrator"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "file_write": true,
+        "command_exec": true
+      },
+      "tools": ["file_read", "file_write", "command_exec", "sessions_send"],
+      "persona_traits": ["注重细节", "擅长代码分析", "重视测试覆盖"],
+      "boundaries": ["不得修改 openclaw.json 配置", "不得跳过测试直接提交"]
+    },
+    {
+      "agent_id": "tester",
+      "role": "worker",
+      "description": "测试者：对 implementer 的修复执行验证，按 P0/P1/P2 分级上报问题",
+      "model": "claude-sonnet-4-20250514",
+      "permissions": {
+        "sessions_send": ["orchestrator"],
+        "sessions_spawn": [],
+        "file_read": true,
+        "command_exec": true
+      },
+      "tools": ["file_read", "command_exec", "sessions_send"],
+      "persona_traits": ["怀疑精神", "系统性覆盖", "精确报告"],
+      "boundaries": ["不得直接修改代码", "不得跳过测试"]
+    }
+  ],
+  "channels": [
+    {
+      "id": "default",
+      "type": "console",
+      "config": {},
+      "routing_rules": {
+        "inbound": {"default_agent": "orchestrator"},
+        "outbound": {"enabled": true, "format": "markdown"}
+      }
+    }
+  ],
+  "convergence_criteria": {
+    "P0": "功能阻断性 bug —— 必须立即修复，回退至需求重新分析",
+    "P1": "功能缺陷但不阻断 —— 由 implementer 修复后 tester 重验",
+    "P2": "非功能性改进 —— 累积至下一轮统一处理",
+    "rule": "连续 3 轮无新 P0/P1/P2 问题且所有已知问题已修复或已验证 → 收敛"
+  },
+  "routing_rules": [
+    {"source": "orchestrator", "target": "implementer", "method": "sessions_spawn", "condition": "分配修复任务时", "priority": "high"},
+    {"source": "orchestrator", "target": "tester", "method": "sessions_spawn", "condition": "分配验证任务时", "priority": "high"},
+    {"source": "implementer", "target": "orchestrator", "method": "sessions_send", "condition": "修复完成后回报结果", "priority": "normal"},
+    {"source": "tester", "target": "orchestrator", "method": "sessions_send", "condition": "验证完成后回报结果", "priority": "normal"}
+  ],
+  "extra": {
+    "model_provider": "anthropic",
+    "temperature": 0.7,
+    "max_tokens": 4096
+  }
+}
